@@ -1,7 +1,7 @@
 {
   "name": "cowork-to-code-bridge",
   "version": "0.1.0",
-  "description": "Run commands on the user's Mac from inside a Cowork sandbox via a small file-based bridge. Drop-in plugin: paste a URL, follow Cowork's prompts, done.",
+  "description": "Run commands on the user's Mac from inside a Cowork sandbox via a small file-based bridge. After installing, just say 'set up the cowork-to-code bridge' in Cowork and the setup skill walks you through the rest.",
   "author": {
     "name": "Abhi Gadikoppula",
     "url": "https://github.com/abhinaykrupa"

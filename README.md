@@ -48,13 +48,26 @@ Open any Cowork session and just say:
 > **"Set up the cowork-to-code bridge."**
 
 That's it. Claude will:
-1. Check if the bridge is already running on your Mac
-2. If yes → confirm it's working and you're done
-3. If no → tell you exactly what to paste in your Mac terminal (which is the install line above)
-4. Verify everything works
-5. Tell you what you can ask it to do
+1. Add the plugin marketplace if it's not already added (one-time `/plugin marketplace add abhinaykrupa/cowork-bridge-marketplace` — Claude runs this for you)
+2. Install the plugin if it's not already installed (one-time `/plugin install cowork-to-code-bridge@cowork-bridge-marketplace` — also driven by Claude)
+3. Check if the bridge daemon is running on your Mac
+4. If yes → confirm it's working and you're done
+5. If no → tell you exactly what to paste in your Mac terminal (which is the install line above)
+6. Verify everything works
+7. Tell you what you can ask it to do
 
 You only need to set up the Mac side **once per Mac**. After that, every new Cowork session just confirms the bridge is alive and you're good to go.
+
+### Prefer to install manually?
+
+If you'd rather paste the plugin commands yourself in Claude Code:
+
+```
+/plugin marketplace add abhinaykrupa/cowork-bridge-marketplace
+/plugin install cowork-to-code-bridge@cowork-bridge-marketplace
+```
+
+Then run the Mac installer (the curl line above) if you haven't already.
 
 ---
 
