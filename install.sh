@@ -201,9 +201,13 @@ Manual verification (optional):
   cat $ENV_FILE                                 # token + bridge root
   tail -f $DAEMON_LOG                           # live daemon output
 
-Uninstall:
-  launchctl unload $PLIST && rm $PLIST
-  rm -rf $BRIDGE_ROOT
-  python3 -m pip uninstall $PACKAGE
+Uninstall (one command — undoes everything this installer did):
+  cowork-to-code-bridge-uninstall
+
+Or non-interactively:
+  cowork-to-code-bridge-uninstall --yes
+
+If 'cowork-to-code-bridge-uninstall' isn't on your PATH:
+  curl -fsSL https://raw.githubusercontent.com/$REPO/main/daemon/uninstall.sh | bash
 
 DONE

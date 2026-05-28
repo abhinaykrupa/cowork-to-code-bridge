@@ -95,11 +95,34 @@ The bridge is closer to a mailbox than an RPC server. It's not trying to compete
 
 ## Uninstall
 
+One command, undoes everything `install.sh` did (stops daemon, removes plist, deletes `~/.cowork-to-code-bridge/`, uninstalls the Python package):
+
 ```bash
-# On your Mac
-bash <(curl -fsSL https://raw.githubusercontent.com/abhinaykrupa/cowork-to-code-bridge/main/daemon/uninstall.sh)
-python3 -m pip uninstall cowork-to-code-bridge
+cowork-to-code-bridge-uninstall
 ```
+
+Non-interactive (no prompts, for scripts):
+
+```bash
+cowork-to-code-bridge-uninstall --yes
+```
+
+Flags:
+
+| Flag | Effect |
+|---|---|
+| `--yes` / `-y` | Skip every confirmation prompt |
+| `--keep-data` | Leave `~/.cowork-to-code-bridge/` (token, scripts, logs) untouched |
+| `--keep-package` | Leave the pip-installed Python package |
+| `--bridge-root PATH` | Override the bridge data directory |
+
+If `cowork-to-code-bridge-uninstall` isn't on your PATH (e.g. user-scheme pip install on a system without `~/Library/Python/X.Y/bin` in PATH), fall back to:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/abhinaykrupa/cowork-to-code-bridge/main/daemon/uninstall.sh | bash
+```
+
+The shell fallback prefers the console script if installed, otherwise does shell-only teardown (everything except the pip-installed package, which it tells you how to remove).
 
 ## Development
 
