@@ -237,7 +237,62 @@ cd "$WORKDIR"
 exec "$CLAUDE_BIN" -p "$TASK" --output-format text
 RUNCLAUDE
 chmod +x "$BRIDGE_ROOT/scripts/run_claude.sh"
-c_green "  ✓ ping.sh + hello.sh + run_claude.sh installed in $BRIDGE_ROOT/scripts/"
+
+# ─── System-info scripts: let Cowork check the Mac directly ──────────────────
+# These answer "check my Mac's health / RAM / disk / processes / network" with
+# real data, fast, without invoking the agent. This is the thing Cowork can't
+# do on its own — the bridge makes it possible.
+cat > "$BRIDGE_ROOT/scripts/mac_health.sh" <<'MH'
+#!/usr/bin/env bash
+# mac_health.sh — full health snapshot of this Mac. Args: none.
+set -u
+echo "=== HOST ==="; scutil --get ComputerName 2>/dev/null; hostname; sw_vers 2>/dev/null
+echo "=== UPTIME / LOAD ==="; uptime
+echo "=== CPU ==="; top -l 1 -n 0 2>/dev/null | grep -E "CPU usage" || echo "n/a"
+echo "=== MEMORY (pages) ==="; vm_stat 2>/dev/null | head -6
+echo "=== DISK ==="; df -h / 2>/dev/null
+echo "=== BATTERY ==="; pmset -g batt 2>/dev/null | head -2 || echo "n/a"
+echo "=== TOP 5 PROCS BY CPU ==="; ps -arcwwwxo pid,pcpu,pmem,comm 2>/dev/null | head -6
+exit 0
+MH
+cat > "$BRIDGE_ROOT/scripts/mac_ram.sh" <<'MR'
+#!/usr/bin/env bash
+# mac_ram.sh — RAM usage summary. Args: none.
+set -u
+TOTAL=$(sysctl -n hw.memsize 2>/dev/null)
+echo "Total RAM: $(( TOTAL / 1024 / 1024 / 1024 )) GB"
+echo "--- vm_stat ---"; vm_stat 2>/dev/null
+echo "--- memory pressure ---"; memory_pressure 2>/dev/null | tail -3 || echo "n/a"
+exit 0
+MR
+cat > "$BRIDGE_ROOT/scripts/mac_disk.sh" <<'MD'
+#!/usr/bin/env bash
+# mac_disk.sh — disk usage (fast). Args: optional path (default /).
+set -u
+echo "=== DISK USAGE ==="; df -h "${1:-/}" 2>/dev/null
+echo; echo "=== ALL MOUNTED VOLUMES ==="; df -h 2>/dev/null | grep -E "^/dev|Filesystem" | head -10
+exit 0
+MD
+cat > "$BRIDGE_ROOT/scripts/mac_top.sh" <<'MT'
+#!/usr/bin/env bash
+# mac_top.sh — top processes. Args: optional count (default 15).
+set -u
+N="${1:-15}"
+echo "=== by CPU ==="; ps -arcwwwxo pid,pcpu,pmem,comm 2>/dev/null | head -"$((N+1))"
+echo "=== by MEM ==="; ps -amcwwwxo pid,pcpu,pmem,comm 2>/dev/null | head -"$((N+1))"
+exit 0
+MT
+cat > "$BRIDGE_ROOT/scripts/mac_network.sh" <<'MN'
+#!/usr/bin/env bash
+# mac_network.sh — network status. Args: none.
+set -u
+echo "=== interfaces (active) ==="; ifconfig 2>/dev/null | grep -E "^[a-z]|inet " | grep -v "127.0.0.1" | head -20
+echo "=== default route ==="; route -n get default 2>/dev/null | grep -E "gateway|interface"
+echo "=== connectivity ==="; ping -c 2 -t 3 1.1.1.1 2>/dev/null | tail -2 || echo "no connectivity"
+exit 0
+MN
+chmod +x "$BRIDGE_ROOT"/scripts/mac_*.sh
+c_green "  ✓ scripts installed: ping, hello, run_claude, mac_health, mac_ram, mac_disk, mac_top, mac_network"
 
 # ─── 6. launchd plist ────────────────────────────────────────────────────────
 step "Installing launchd agent (auto-start on login)"

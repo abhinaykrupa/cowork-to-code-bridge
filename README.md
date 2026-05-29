@@ -104,8 +104,15 @@ The Cowork paste-line just tells Claude to follow [`SETUP.md`](./SETUP.md). You 
 The install gives you these to start:
 
 - `run_claude.sh` — **hands a task to Claude Code on your Mac** (the main event)
+- `mac_health.sh` — full health snapshot (CPU, memory, disk, battery, top processes)
+- `mac_ram.sh` — RAM usage
+- `mac_disk.sh` — disk space
+- `mac_top.sh` — top processes by CPU and memory
+- `mac_network.sh` — network status and connectivity
 - `ping.sh` — confirms the bridge works
 - `hello.sh` — echoes back a greeting
+
+So from Cowork you can just say **"check my Mac's health"** or **"how much RAM am I using?"** and get real numbers back from your actual machine — the thing Cowork can't do on its own. For anything open-ended ("why is my Mac slow?"), it routes to Claude Code via `run_claude.sh` and the agent figures it out.
 
 **Side benefit — run fixed actions directly.** For simple, repeatable things you don't need a whole agent for (a specific build command, a git push), you can save a small "script" and call it directly. Just ask Claude: *"I want to push my project to GitHub from here."* It writes the script, tells you where to save it, and from then on *"push my project"* just works. You never write code yourself — you're only copying its output into a file.
 
