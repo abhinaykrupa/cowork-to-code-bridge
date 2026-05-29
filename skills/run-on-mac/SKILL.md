@@ -5,7 +5,38 @@ description: Use this skill when the user asks to do something that has to happe
 
 # run-on-mac skill
 
-You can execute whitelisted scripts on the user's Mac via the bridge daemon. Use this any time the user asks for an action that needs their local machine.
+The bridge connects Cowork to **Claude Code on the user's Mac**. The headline
+capability: hand a free-form task to a local Claude Code agent via
+`scripts/run_claude.sh`. You can also run other whitelisted scripts directly for
+simple fixed actions. Use this any time the user asks for something that needs
+their local machine.
+
+## Hand a task to Claude Code (the main path)
+
+```python
+from cowork_to_code_bridge import call_remote
+
+result = call_remote(
+    "scripts/run_claude.sh",
+    args=["Run the test suite and fix any failures", "/path/to/repo"],
+    timeout=600,
+    idempotency_key="fix-tests-2026-05-29-a",  # REQUIRED for Claude Code tasks
+)
+print(result["stdout"])   # what the local Claude Code agent reported back
+```
+
+**Always pass an `idempotency_key`** for `run_claude.sh` — a Claude Code task can
+edit/commit/push, so if the connection drops and you retry, the key ensures the
+daemon returns the cached result instead of running the agent a second time.
+
+`run_claude.sh` runs Claude Code with normal local permissions. If the user wants
+to restrict what a Cowork-originated task can do, point them to the
+`CLAUDE_FLAGS` block in `~/.cowork-to-code-bridge/scripts/run_claude.sh` (e.g.
+`--permission-mode plan` or a tool allowlist).
+
+## Run a fixed script directly (simple actions)
+
+For predictable, repeatable actions you don't need a full agent for:
 
 ## When to use this skill
 

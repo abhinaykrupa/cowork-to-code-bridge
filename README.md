@@ -1,16 +1,19 @@
 # cowork-to-code-bridge
 
-**Let Claude Cowork run things on your Mac.**
+**Connect Claude Cowork to Claude Code on your Mac.**
 
-If you use [Claude Cowork](https://claude.ai/cowork), you've probably noticed it can write and edit files in your project, but it can't actually *do* things on your computer — it can't run your build, push to GitHub, install a package, or run a script. That's because Cowork runs in a secure sandbox that can't reach out to your Mac.
+[Claude Cowork](https://claude.ai/cowork) is great at planning and editing, but it runs in a sealed cloud sandbox — it can't reach your actual machine. **Claude Code**, running on your Mac, *can*: it has your shell, your repos, your tools, and full agent abilities.
 
-This bridge fixes that, safely. Once installed, you can say things in Cowork like:
+This bridge connects the two. Cowork hands a task to **Claude Code on your Mac**, a real local agent does the work, and the result comes back to your Cowork chat. So you can say things in Cowork like:
 
-> *"run `pytest` on my project"*
-> *"git push my latest commit"*
-> *"check disk space on my Mac"*
+> *"have Claude Code on my Mac run the test suite and fix what's failing"*
+> *"tell my Mac's Claude Code to review the diff and push if it's clean"*
 
-…and Claude will actually do them, on your machine, and show you the output.
+…and a Claude Code agent on your machine actually does it.
+
+Because Claude Code can run things on your Mac, a useful **side benefit** is that the same bridge lets Cowork run approved shell scripts directly (builds, git, disk checks) without going through the agent — handy for simple, fixed actions.
+
+**It's idempotent.** Tasks have side effects (edits, commits, pushes), so the bridge caches results by an idempotency key: a retry after a dropped connection returns the cached result instead of running the agent — or the script — twice.
 
 ---
 
@@ -29,12 +32,15 @@ Not sure which you are? Just paste the [one setup line below](#install-about-2-m
 
 ## Is this safe?
 
-Yes — by design.
+Mostly — and the parts that need your attention are spelled out honestly below.
 
-- **Nothing runs without your approval.** You decide which scripts the bridge is allowed to run by saving them in a specific folder on your Mac. Anything else is rejected.
+- **Only approved scripts run.** The bridge will only run scripts you've saved in a specific folder on your Mac. Cowork can't run arbitrary commands — it can only trigger the scripts you've enabled.
 - **No internet listener.** The bridge doesn't open any ports. Nothing from the outside world can talk to it.
 - **Token-protected.** A secret token is generated during install. Only Cowork sessions that know the token can use the bridge.
 - **Runs as you.** The bridge runs with your normal user permissions — nothing more, nothing less.
+- **Idempotent.** A retry won't double-run a task or script — repeated requests with the same key return the cached result.
+
+**The one thing to understand:** the headline script, `run_claude.sh`, hands a *free-form task* to a Claude Code agent on your Mac. That agent is as capable as Claude Code normally is — it can edit files, run commands, commit, push. That's the power you want, but it means a task from Cowork is acted on by a real agent with your machine's access. If you want to limit that, `run_claude.sh` has a clearly-marked spot to add restrictions (e.g. plan-only mode, or a tool allowlist) — see [the script](./examples/allowed_scripts/run_claude.sh) and [architecture docs](./docs/architecture.md). For fixed, predictable actions, prefer a specific script over `run_claude.sh`.
 
 You can [uninstall it completely with one command](#uninstall) at any time.
 
@@ -91,16 +97,17 @@ The Cowork paste-line just tells Claude to follow [`SETUP.md`](./SETUP.md). You 
 
 ---
 
-## What can I ask Claude to do?
+## What can I ask for?
 
-Anything you've saved as a small "script" — a saved action — in your `~/.cowork-to-code-bridge/scripts/` folder. The install gives you two to start with:
+**The main thing: hand a task to Claude Code on your Mac.** The install ships a script called `run_claude.sh` that does exactly this. From Cowork you say something like *"have Claude Code on my Mac run the tests and fix what breaks"* and a real Claude Code agent on your machine carries it out, then reports back. That's the headline feature — Cowork delegating to a full local agent.
 
+The install gives you these to start:
+
+- `run_claude.sh` — **hands a task to Claude Code on your Mac** (the main event)
 - `ping.sh` — confirms the bridge works
 - `hello.sh` — echoes back a greeting
 
-**Adding a new action is easy: just ask Claude.** Say something like *"I want to be able to push my project to GitHub from here."* Claude writes the script for you and tells you exactly where to save it on your Mac. You paste it in, and from then on you can just say *"push my project to GitHub"* and it happens.
-
-You don't have to write any code yourself — Claude does the drafting. You're only ever copying its output into a file.
+**Side benefit — run fixed actions directly.** For simple, repeatable things you don't need a whole agent for (a specific build command, a git push), you can save a small "script" and call it directly. Just ask Claude: *"I want to push my project to GitHub from here."* It writes the script, tells you where to save it, and from then on *"push my project"* just works. You never write code yourself — you're only copying its output into a file.
 
 <details>
 <summary>What a script actually looks like (optional — Claude makes these for you)</summary>

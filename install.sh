@@ -210,7 +210,34 @@ cat > "$BRIDGE_ROOT/scripts/hello.sh" <<'HELLO'
 echo "hello from $(hostname) — args: $*"
 HELLO
 chmod +x "$BRIDGE_ROOT/scripts/hello.sh"
-c_green "  ✓ ping.sh + hello.sh installed in $BRIDGE_ROOT/scripts/"
+
+# run_claude.sh — THE bridge's purpose: hand a task to Claude Code on the Mac.
+cat > "$BRIDGE_ROOT/scripts/run_claude.sh" <<'RUNCLAUDE'
+#!/usr/bin/env bash
+# run_claude.sh — hand a task to Claude Code (the `claude` CLI) on this Mac.
+# This is what makes the bridge a Cowork -> Claude Code connector.
+# Args: $1 = task/prompt (required), $2 = working dir (optional, default $PWD).
+# Always pass an idempotency_key from Cowork — Claude Code tasks have side effects.
+set -euo pipefail
+TASK="${1:?run_claude.sh: a task/prompt is required as the first argument}"
+WORKDIR="${2:-$PWD}"
+CLAUDE_BIN="$(command -v claude 2>/dev/null || true)"
+if [[ -z "$CLAUDE_BIN" ]]; then
+  for cand in /opt/homebrew/bin/claude /usr/local/bin/claude; do
+    [[ -x "$cand" ]] && { CLAUDE_BIN="$cand"; break; }
+  done
+fi
+if [[ -z "$CLAUDE_BIN" ]]; then
+  echo "run_claude.sh: 'claude' CLI not found on this Mac." >&2
+  exit 127
+fi
+cd "$WORKDIR"
+# To restrict what Cowork-originated tasks can do, edit these flags
+# (e.g. --permission-mode plan, or --allowedTools "...").
+exec "$CLAUDE_BIN" -p "$TASK" --output-format text
+RUNCLAUDE
+chmod +x "$BRIDGE_ROOT/scripts/run_claude.sh"
+c_green "  ✓ ping.sh + hello.sh + run_claude.sh installed in $BRIDGE_ROOT/scripts/"
 
 # ─── 6. launchd plist ────────────────────────────────────────────────────────
 step "Installing launchd agent (auto-start on login)"

@@ -62,18 +62,27 @@ once. Continue to Step 1 below.
 
 ## What you're setting up (so you understand the goal)
 
-The bridge lets this Cowork session run whitelisted scripts on the user's Mac.
+This bridge connects **Cowork → Claude Code on the user's Mac**. Cowork (you,
+here in the sandbox) hands a task through the bridge to the `claude` CLI running
+on the user's Mac; a real Claude Code agent does the work there and the result
+comes back. (As a side benefit it can also run other approved scripts — builds,
+git, etc.) The bridge is **idempotent**: retries with the same key return a
+cached result instead of running the task twice.
+
 It has two halves:
 
 - **Mac daemon** — a tiny background process on the user's Mac. Started once by
   a `curl … | bash` installer. Survives reboots (launchd). You cannot start it
-  from the sandbox; only the user can, by running one command on their Mac.
+  from the sandbox; only the user can, by running one command on their Mac. It
+  ships a `run_claude.sh` script that invokes Claude Code locally.
 - **Sandbox client** — the `cowork_to_code_bridge` Python package, importable
   *here*. You install it with `pip`. It talks to the daemon through a shared
   folder, authenticated by a token.
 
 Your job: get the client importable here, confirm the daemon is alive, and if it
 isn't, walk the user through the single Mac command with maximum hand-holding.
+Once live, hand tasks to Claude Code via `call_remote("scripts/run_claude.sh",
+args=[task, workdir], idempotency_key=...)`.
 
 ---
 
@@ -173,18 +182,23 @@ diagnostic output to the user.
 
 Once a probe returns **LIVE**:
 
-> ✅ Your Mac is connected. You can now ask me to run things on it — just say
-> what you want in plain English. For example:
+> ✅ Your Mac is connected to Claude Code. You can now hand tasks to a Claude
+> Code agent running on your machine — just say what you want in plain English.
+> For example:
 >
-> - "run `pytest` on my project"
-> - "git push my latest commit"
-> - "check how much disk space I have left"
+> - "have Claude Code on my Mac run the tests and fix what's failing"
+> - "ask my Mac's Claude Code to review the diff and push if it's clean"
+> - "run `pytest` on my project" (simple actions can run as a fixed script too)
 >
-> I'll handle the rest. (For safety, I can only run small scripts you've
-> approved on your Mac — if I need a new one, I'll write it and tell you exactly
-> where to save it.)
+> I'll route it to your Mac and bring back the result. (For repeatable, fixed
+> actions I can also use small approved scripts — if I need a new one, I'll write
+> it and tell you where to save it.)
 
-From here, use the `run-on-mac` behavior (`call_remote`) for any Mac action.
+From here, hand tasks to Claude Code with
+`call_remote("scripts/run_claude.sh", args=[task, workdir], timeout=600,
+idempotency_key=...)`. Always pass an `idempotency_key` for Claude Code tasks —
+they have side effects, and the key makes a retry safe. For simple fixed
+actions, call the specific script directly (`scripts/git_status.sh`, etc.).
 
 ## Future sessions
 

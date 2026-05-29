@@ -1,7 +1,7 @@
 {
   "name": "cowork-to-code-bridge",
-  "version": "0.2.0",
-  "description": "Let Claude Cowork run things on your Mac — scripts, builds, git, and more. After installing, just say 'set up the cowork-to-code bridge' in Cowork and the setup skill walks you through the rest. Safe by design: only runs scripts you approve.",
+  "version": "0.3.0",
+  "description": "Connect Claude Cowork to Claude Code on your Mac. Cowork hands a task to a local Claude Code agent (and can run approved scripts too); the bridge is idempotent and token-protected. After installing, say 'set up my Mac bridge' in Cowork and the setup skill walks you through the rest.",
   "author": {
     "name": "Abhi Gadikoppula",
     "url": "https://github.com/abhinaykrupa"

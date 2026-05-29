@@ -1,5 +1,18 @@
 # Architecture
 
+## What this connects
+
+The bridge connects **Cowork → Claude Code on the user's Mac**. The primary
+flow: Cowork writes a command targeting `scripts/run_claude.sh`, the daemon runs
+the local `claude` CLI headless (`claude -p "<task>"`), a real Claude Code agent
+does the work on the Mac, and the result is written back for Cowork to read.
+Running other approved shell/python scripts directly is the same mechanism with
+a different (fixed) script — useful for simple, repeatable actions.
+
+Because Claude Code tasks have side effects, the bridge is **idempotent**: a
+command may carry an `idempotency_key`, and a repeat with the same key returns
+the cached result instead of re-running. See "Crash resilience" below.
+
 ## Why a file-based bridge
 
 Cowork sessions run in a sandbox. From inside Cowork you cannot:

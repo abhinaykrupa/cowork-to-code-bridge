@@ -1,7 +1,7 @@
 [project]
 name = "cowork-to-code-bridge"
-version = "0.2.0"
-description = "Run commands on your Mac from a Claude Cowork sandbox via a small file-based bridge daemon."
+version = "0.3.0"
+description = "Connect Claude Cowork to Claude Code on your Mac via a small, idempotent, file-based bridge daemon. Cowork hands tasks to a local Claude Code agent (and can run approved scripts)."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
