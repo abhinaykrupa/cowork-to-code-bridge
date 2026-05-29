@@ -172,8 +172,8 @@ output from their Mac terminal):
 |---|---|---|
 | Daemon registered? | `launchctl list \| grep cowork-to-code-bridge` | empty → `launchctl load ~/Library/LaunchAgents/dev.cowork-to-code-bridge.daemon.plist`, then re-probe |
 | Right folder? | `cat ~/.cowork-to-code-bridge/.env` | take the `BRIDGE_ROOT=` value, set it here with `os.environ`, re-probe |
-| Daemon erroring? | `tail -20 ~/.cowork-to-code-bridge/daemon.err` | surface the error to the user; common: Python < 3.10 → `brew install python@3.12` then re-run the curl line |
-| Python missing | (installer prints this) | tell them `brew install python@3.12`, then re-run the curl line |
+| Daemon erroring? | `tail -20 ~/.cowork-to-code-bridge/daemon.err` | surface the error to the user |
+| "No Python 3.10+ found" | (installer message) | The installer auto-installs Python (via Homebrew) by default — this can take a few minutes and may prompt for the Mac password. If the user saw it FAIL or declined: tell them to run `brew install python@3.12` (or install Homebrew first: the one-paste command from brew.sh), then re-run the curl line. They can also re-run with `BRIDGE_PYTHON_AUTOINSTALL=0` to skip auto-install. |
 
 Don't loop silently. After two failed attempts, surface the exact error and the
 diagnostic output to the user.

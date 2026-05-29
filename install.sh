@@ -62,17 +62,92 @@ for candidate in python3.13 python3.12 python3.11 python3.10; do
   fi
 done
 
+# Re-scan helper: look again for a usable python3.10+ after an install attempt.
+rescan_python() {
+  PY=""; PY_VER=""
+  local candidate cand_path resolved ver major minor
+  for candidate in python3.13 python3.12 python3.11 python3.10; do
+    command -v "$candidate" >/dev/null 2>&1 || continue
+    cand_path="$(command -v "$candidate")"
+    if command -v readlink >/dev/null 2>&1; then
+      resolved="$(readlink -f "$cand_path" 2>/dev/null || echo "$cand_path")"
+    else
+      resolved="$cand_path"
+    fi
+    ver=$("$resolved" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "")
+    [[ -z "$ver" ]] && continue
+    major=$(echo "$ver" | cut -d. -f1); minor=$(echo "$ver" | cut -d. -f2)
+    if [[ "$major" -eq 3 ]] && [[ "$minor" -ge 10 ]]; then
+      PY="$resolved"; PY_VER="$ver"; return 0
+    fi
+  done
+  return 1
+}
+
+# Auto-install Python 3.12 on the fly: ensure Homebrew, then brew install.
+# Gated by BRIDGE_PYTHON_AUTOINSTALL (default 1; set 0 to get instructions).
+AUTO_PY="${BRIDGE_PYTHON_AUTOINSTALL:-1}"
+autoinstall_python() {
+  c_yellow "  No Python 3.10+ found — attempting on-the-fly install."
+  c_yellow "  (Set BRIDGE_PYTHON_AUTOINSTALL=0 to skip this and get manual steps.)"
+
+  # 1. Ensure Homebrew exists (it ships its own Python as a dep).
+  local BREW=""
+  for b in brew /opt/homebrew/bin/brew /usr/local/bin/brew; do
+    command -v "$b" >/dev/null 2>&1 && { BREW="$(command -v "$b")"; break; }
+    [[ -x "$b" ]] && { BREW="$b"; break; }
+  done
+
+  if [[ -z "$BREW" ]]; then
+    c_yellow "  Homebrew not found. Installing Homebrew first (this can take a few"
+    c_yellow "  minutes and may ask for your Mac password — that's expected)."
+    # Official Homebrew installer. NONINTERACTIVE avoids the 'press RETURN' prompt;
+    # it may still prompt for sudo password, which we cannot bypass safely.
+    if ! command -v curl >/dev/null 2>&1; then
+      c_red "  ✗ curl not available — cannot install Homebrew automatically."
+      return 1
+    fi
+    NONINTERACTIVE=1 /bin/bash -c \
+      "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" \
+      </dev/null || { c_red "  ✗ Homebrew install failed."; return 1; }
+    # Put brew on PATH for the rest of this script (Apple Silicon vs Intel).
+    for b in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+      [[ -x "$b" ]] && { BREW="$b"; eval "$("$b" shellenv)"; break; }
+    done
+    [[ -z "$BREW" ]] && { c_red "  ✗ Homebrew installed but 'brew' not found on PATH."; return 1; }
+    c_green "  ✓ Homebrew ready ($BREW)"
+  fi
+
+  # 2. brew install python@3.12
+  c_yellow "  Installing python@3.12 via Homebrew…"
+  "$BREW" install python@3.12 >&2 2>&1 || { c_red "  ✗ brew install python@3.12 failed."; return 1; }
+  # Make sure the brew bin dir is on PATH so python3.12 resolves on rescan.
+  eval "$("$BREW" shellenv)" 2>/dev/null || true
+  hash -r 2>/dev/null || true
+  return 0
+}
+
 if [[ -z "$PY" ]]; then
-  c_red "  ✗ No Python 3.10+ interpreter found."
-  echo
-  echo "  Apple's stock /usr/bin/python3 is too old (3.8) and is intentionally"
-  echo "  ignored here. Install a real Python via Homebrew, then re-run this:"
-  echo
-  echo "    brew install python@3.12"
-  echo
-  echo "  After install, verify it's on PATH:"
-  echo "    command -v python3.12"
-  exit 1
+  installed_ok=0
+  if [[ "$AUTO_PY" == "1" ]] && autoinstall_python && rescan_python; then
+    installed_ok=1
+  fi
+  if [[ "$installed_ok" -ne 1 ]]; then
+    c_red "  ✗ No Python 3.10+ interpreter available."
+    echo
+    echo "  Apple's stock /usr/bin/python3 is too old (3.8) and is intentionally"
+    echo "  ignored here. Install a modern Python, then re-run this installer:"
+    echo
+    echo "    # if you have Homebrew:"
+    echo "    brew install python@3.12"
+    echo
+    echo "    # if you don't have Homebrew, install it first (one paste):"
+    echo '    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+    echo "    # then: brew install python@3.12"
+    echo
+    echo "  After install, verify: command -v python3.12"
+    exit 1
+  fi
 fi
 export PY
 c_green "  ✓ using $PY (Python $PY_VER)"

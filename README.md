@@ -72,7 +72,7 @@ That's the whole start. Claude reads the setup guide, installs what it needs ins
 
 After this, **every future Cowork session connects automatically** — no terminal, no re-setup.
 
-> **Don't have Python 3.10+ on your Mac?** Claude will catch this and tell you to run `brew install python@3.12` first. (No Homebrew? Get it at [brew.sh](https://brew.sh) — one paste.)
+> **Don't have Python 3.10+ on your Mac?** The installer handles it: if it finds only Apple's old stock Python (3.8), it installs a modern one for you (via Homebrew, installing Homebrew first if needed). This part can take a few minutes and may ask for your Mac password — that's normal. To skip the auto-install and just get manual steps instead, run the installer with `BRIDGE_PYTHON_AUTOINSTALL=0`.
 
 <details>
 <summary>Doing it manually (for developers)</summary>
