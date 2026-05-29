@@ -1,6 +1,6 @@
 # cowork-to-code-bridge
 
-**Let Claude in your browser run things on your Mac.**
+**Let Claude Cowork run things on your Mac.**
 
 If you use [Claude Cowork](https://claude.ai/cowork), you've probably noticed it can write and edit files in your project, but it can't actually *do* things on your computer — it can't run your build, push to GitHub, install a package, or run a script. That's because Cowork runs in a secure sandbox that can't reach out to your Mac.
 
@@ -11,26 +11,6 @@ This bridge fixes that, safely. Once installed, you can say things in Cowork lik
 > *"check disk space on my Mac"*
 
 …and Claude will actually do them, on your machine, and show you the output.
-
----
-
-## Where this fits — the full Claude development cycle
-
-The bridge is the missing piece that lets a single Cowork conversation drive a real software project end-to-end. Combined with Claude Code (and its built-in skills like `frontend-design`, `verify`, `code-review`, `security-review`), you get full coverage of the dev cycle without leaving the chat:
-
-| Phase | Who does it | What it looks like |
-|---|---|---|
-| **Design** | Claude Code's `frontend-design` skill, or claude.ai's artifact canvas | Generate React/Tailwind components, iterate visually |
-| **Build** | Claude Code in your editor / Cowork writing files into your project | Edit files, scaffold features, refactor |
-| **Run locally** | **This bridge** — Cowork → Mac shell | Start dev servers, run scripts, hit endpoints |
-| **Test** | **This bridge** running `pytest` / `npm test` / your CI command on your Mac | Real test output streamed back to Cowork |
-| **Review** | Claude Code's `code-review` and `security-review` skills | Catch correctness and security issues on the current diff |
-| **Ship** | **This bridge** running `git push`, `gh pr create`, deploy scripts | Push, open PRs, kick off deploys — all from inside Cowork |
-| **Operate** | **This bridge** running ops scripts (logs, health checks, rollbacks) | Read prod logs, check disk space, restart services |
-
-Before the bridge: Cowork could read and write files in your project, but anything requiring your *machine* — shell, network egress, system state — meant breaking out of Cowork to a terminal. Now the loop closes. One conversation, full cycle.
-
-> The design phase is handled well by Claude Code's `frontend-design` skill directly — no extra plumbing needed there. The bridge is what makes everything *after* design (run, test, ship, operate) reachable from a Cowork session.
 
 ---
 
@@ -47,9 +27,11 @@ You can [uninstall it completely with one command](#uninstall) at any time.
 
 ---
 
-## Install (2 minutes, one paste per side)
+## Install (about 2 minutes)
 
-### On your Mac (one time)
+Two quick steps: paste one line into your Mac's Terminal, then ask Claude in Cowork to finish the setup.
+
+### Step 1 — On your Mac (one time)
 
 Open your Terminal app (Spotlight → "Terminal") and paste this single line:
 
@@ -61,7 +43,7 @@ Press Enter. You'll see status lines scroll by. When it ends with `DONE`, the Ma
 
 > **Don't have Python 3.10+?** Run `brew install python@3.12` first. If you don't have Homebrew, install it from [brew.sh](https://brew.sh) (one paste, ~5 minutes).
 
-### In Cowork (every time you start a new session — but Claude remembers!)
+### Step 2 — In Cowork
 
 Open any Cowork session and just say:
 
@@ -93,38 +75,32 @@ Then run the Mac installer (the curl line above) if you haven't already.
 
 ## What can I ask Claude to do?
 
-Anything that's a script in your `~/.cowork-to-code-bridge/scripts/` folder.
+Anything you've saved as a small "script" — a saved action — in your `~/.cowork-to-code-bridge/scripts/` folder. The install gives you two to start with:
 
-The install gives you a couple of starter scripts:
-
-- `ping.sh` — just confirms the bridge works
+- `ping.sh` — confirms the bridge works
 - `hello.sh` — echoes back a greeting
 
-You can add your own. For example, save this on your Mac as `~/.cowork-to-code-bridge/scripts/git_push.sh`:
+**Adding a new action is easy: just ask Claude.** Say something like *"I want to be able to push my project to GitHub from here."* Claude writes the script for you and tells you exactly where to save it on your Mac. You paste it in, and from then on you can just say *"push my project to GitHub"* and it happens.
+
+You don't have to write any code yourself — Claude does the drafting. You're only ever copying its output into a file.
+
+<details>
+<summary>What a script actually looks like (optional — Claude makes these for you)</summary>
+
+A script is just a short text file. A "push to GitHub" one might be saved as `~/.cowork-to-code-bridge/scripts/git_push.sh`:
 
 ```bash
 #!/usr/bin/env bash
-cd "$1"           # first argument = repo path
+cd "$1"           # first argument = your project folder
 git push origin main
 ```
 
-Then make it runnable:
+Make it runnable once with `chmod +x ~/.cowork-to-code-bridge/scripts/git_push.sh`, and you're done.
+</details>
 
-```bash
-chmod +x ~/.cowork-to-code-bridge/scripts/git_push.sh
-```
+### Why scripts, and not just "run any command"?
 
-Now in Cowork you can say:
-
-> *"push my AAQuant repo to GitHub"*
-
-And Claude will run that script with your repo path.
-
-### Why scripts and not arbitrary commands?
-
-For your safety. If Claude could run any command, an unexpected prompt could do real damage. Forcing every action through a script you wrote yourself means **you decide what's possible** — Claude can only do things you've explicitly enabled.
-
-> **Tip:** Ask Claude to help you write the script. It can draft it; you save it to your Mac yourself.
+For your safety. If Claude could run *any* command, a stray instruction could do real damage. By only allowing the actions you've saved as scripts, **you decide what's possible** — Claude can never run anything you haven't explicitly enabled.
 
 ---
 
@@ -241,11 +217,27 @@ python3 -c "import cowork_to_code_bridge"
 
 ---
 
+## What you can build with it
+
+Once the bridge is in place, a single Cowork chat can run a whole project — not just edit files, but actually run, test, and ship them. Paired with Claude Code's built-in skills (like `frontend-design`, `code-review`, `security-review`), one conversation covers the full cycle:
+
+| Step | How the bridge helps |
+|---|---|
+| **Build & design** | Claude Code writes the code and the UI |
+| **Run** | The bridge starts your app and dev servers on your Mac |
+| **Test** | The bridge runs your tests and shows you the results |
+| **Ship** | The bridge runs `git push`, opens PRs, kicks off deploys |
+| **Operate** | The bridge checks logs, disk space, restarts services |
+
+Before the bridge, anything that needed your actual machine meant leaving Cowork for a terminal. Now it all happens in one chat.
+
+---
+
 ## How it actually works (for the curious)
 
 ```
-  Cowork sandbox (browser)                    Your Mac
-  ────────────────────────                    ────────
+  Claude Cowork (sandbox)                     Your Mac
+  ───────────────────────                     ────────
   writes JSON →   bridge/queue/cmd_*.json  ← polled by daemon (~1s)
                                                 ↓ runs script in your whitelist
                                             ~/.cowork-to-code-bridge/scripts/
@@ -309,19 +301,18 @@ Three protections:
 
 If you want even more conservative: review every Claude suggestion before agreeing to run it.
 
-**Q: What happens if my Mac crashes or reboots while a script is running?**
-The daemon is crash-safe. On the next startup it auto-restarts via launchd, replays an append-only journal, and:
-- Any script that was in-flight when the crash happened is reported as `exit_code=-4` ("indeterminate") rather than silently re-run. So a half-finished `git push` won't fire twice.
-- Any script that *completed* before the crash keeps its result intact.
-- Cowork sessions that retry with the same `idempotency_key` get the cached result instead of triggering a duplicate run — the cache survives reboots.
+**Q: What happens if my Mac crashes or reboots while something is running?**
+You're covered. The bridge restarts itself automatically, and it's careful not to repeat anything dangerous:
+- An action that was *mid-run* when the crash hit is reported as "didn't finish — status unknown" rather than quietly run again. So a half-finished `git push` won't accidentally fire twice.
+- An action that had already *finished* keeps its result.
 
-For non-idempotent operations (deploys, money-moving, destructive git ops), pass `idempotency_key="..."` to `call_remote`. See `docs/architecture.md` for the full state machine.
+Developers: the full crash-recovery model (the journal, in-flight markers, and the `idempotency_key` option for safe retries) is documented in [`docs/architecture.md`](docs/architecture.md).
 
 ---
 
 ## Status & contributing
 
-**v0.1.0** — early. Functional but rough edges (especially the Mac installer's Python discovery). Built for myself, open-sourced because it's useful to others.
+**v0.2.0** — early, but solid. The core works and now survives crashes and reboots without repeating risky actions. A few rough edges remain (mainly the Mac installer's Python detection). Built for myself, open-sourced because it's useful to others.
 
 PRs welcome at [github.com/abhinaykrupa/cowork-to-code-bridge](https://github.com/abhinaykrupa/cowork-to-code-bridge). Issues triaged best-effort. Not "production-grade" until tagged `v1.0.0`.
 
