@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 420" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">
+  <rect width="720" height="420" rx="10" fill="#0d1117"/>
+  <rect width="720" height="32" rx="10" fill="#161b22"/>
+  <rect y="22" width="720" height="10" fill="#161b22"/>
+  <circle cx="20" cy="16" r="6" fill="#ff5f56"/>
+  <circle cx="40" cy="16" r="6" fill="#ffbd2e"/>
+  <circle cx="60" cy="16" r="6" fill="#27c93f"/>
+  <text x="360" y="21" fill="#8b949e" text-anchor="middle" font-size="12">Claude Cowork  ·  cowork-to-code-bridge</text>
+
+  <style>
+    .line { opacity: 0; }
+    .you  { fill: #58a6ff; }
+    .dim  { fill: #8b949e; }
+    .ok   { fill: #3fb950; }
+    .out  { fill: #c9d1d9; }
+    .acc  { fill: #d2a8ff; }
+    @keyframes show { to { opacity: 1; } }
+    .l1 { animation: show .01s 0.3s forwards; }
+    .l2 { animation: show .01s 1.4s forwards; }
+    .l3 { animation: show .01s 2.3s forwards; }
+    .l4 { animation: show .01s 3.2s forwards; }
+    .l5 { animation: show .01s 4.1s forwards; }
+    .l6 { animation: show .01s 5.0s forwards; }
+    .l7 { animation: show .01s 6.0s forwards; }
+    .l8 { animation: show .01s 7.0s forwards; }
+    .l9 { animation: show .01s 8.0s forwards; }
+  </style>
+
+  <text x="20" y="68"  class="line l1"><tspan class="dim">you ▸ </tspan><tspan class="you">build me a Flask app on my machine, install it, run it, and confirm it responds</tspan></text>
+
+  <text x="20" y="104" class="line l2"><tspan class="acc">claude ▸ </tspan><tspan class="out">Handing this to Claude Code on your machine via the bridge…</tspan></text>
+
+  <text x="20" y="140" class="line l3"><tspan class="dim">  → created app.py + requirements.txt</tspan></text>
+  <text x="20" y="164" class="line l4"><tspan class="dim">  → python -m venv .venv  ·  pip install flask</tspan></text>
+  <text x="20" y="188" class="line l5"><tspan class="dim">  → flask run :5099  (PID 33093)</tspan></text>
+  <text x="20" y="212" class="line l6"><tspan class="dim">  → curl http://127.0.0.1:5099/  →  </tspan><tspan class="ok">{"status":"ok"} 200</tspan></text>
+  <text x="20" y="236" class="line l7"><tspan class="dim">  → stopped server, cleaned up</tspan></text>
+
+  <text x="20" y="276" class="line l8"><tspan class="ok">claude ▸ Done.</tspan><tspan class="out"> Built and verified a working Flask app on your machine.</tspan></text>
+
+  <text x="20" y="320" class="line l9"><tspan class="dim">────────────────────────────────────────────────────────────</tspan></text>
+  <text x="20" y="344" class="line l9"><tspan class="dim">one command to install · runs on macOS &amp; Linux · idempotent · no open ports</tspan></text>
+  <text x="20" y="372" class="line l9"><tspan class="acc">$ curl -fsSL .../install.sh | bash</tspan><tspan class="dim">   then just talk to Claude</tspan></text>
+</svg>

@@ -9,6 +9,10 @@
 
 **Let Claude run code on your real machine — safely — from any Claude chat.**
 
+<p align="center">
+  <img src="./docs/demo.svg" alt="Cowork hands a 'build me a Flask app' task to Claude Code on your machine; it scaffolds, installs, runs, and verifies it — then reports back." width="100%">
+</p>
+
 > 🖥️ **macOS & Linux.** Works on your Mac (launchd) or a Linux box/server (systemd). Windows isn't supported yet.
 
 [Claude Cowork](https://claude.ai/cowork) (and Claude in your browser) is great at planning and editing, but it runs in a sealed cloud sandbox — it can't reach your actual machine. **Claude Code**, running on your computer, *can*: it has your shell, your repos, your tools, and full agent abilities.
