@@ -143,6 +143,7 @@ The install gives you these to start:
 - `mac_disk.sh` — disk space
 - `mac_top.sh` — top processes by CPU and memory
 - `mac_network.sh` — network status and connectivity
+- `port_check.sh` — shows what is listening on a TCP port
 - `ping.sh` — confirms the bridge works
 - `hello.sh` — echoes back a greeting
 

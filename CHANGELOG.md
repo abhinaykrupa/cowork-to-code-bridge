@@ -4,6 +4,12 @@ All notable changes to this project. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are the `pyproject.toml`
 / `plugin.json` version.
 
+## [Unreleased]
+
+### Added
+- `port_check.sh` starter script for checking which process is listening on a
+  TCP port, plus installer and skill documentation wiring.
+
 ## [0.5.0]
 
 ### Added

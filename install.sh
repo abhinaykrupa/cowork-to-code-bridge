@@ -9,7 +9,7 @@
 #   2. pip-installs the cowork-to-code-bridge package (PyPI, fallback GitHub main).
 #   3. Creates ~/.cowork-to-code-bridge/ with queue/, results/, processed/, scripts/.
 #   4. Generates BRIDGE_TOKEN and writes it to ~/.cowork-to-code-bridge/.env.
-#   5. Installs ping.sh + hello.sh starter scripts.
+#   5. Installs ping.sh + hello.sh + system-info starter scripts.
 #   6. Installs a launchd plist with absolute Python interpreter path so the
 #      daemon auto-starts on login and survives reboots.
 #   7. Bootstraps the daemon via `launchctl bootstrap` (fallback `load -w`).
@@ -452,8 +452,61 @@ else
 fi
 exit 0
 MN
-chmod +x "$BRIDGE_ROOT"/scripts/mac_*.sh
-c_green "  ✓ scripts installed: ping, hello, run_claude, mac_health, mac_ram, mac_disk, mac_top, mac_network"
+cat > "$BRIDGE_ROOT/scripts/port_check.sh" <<'PC'
+#!/usr/bin/env bash
+# port_check.sh — show what is listening on a TCP port (macOS or Linux).
+# Args: port number, e.g. 3000.
+set -u
+
+usage() {
+  echo "Usage: $0 PORT" >&2
+  echo "PORT must be a number from 1 to 65535." >&2
+  exit 2
+}
+
+PORT="${1:-}"
+case "$PORT" in
+  ""|*[!0-9]*) usage ;;
+esac
+
+if [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
+  usage
+fi
+
+echo "=== TCP LISTENERS ON PORT $PORT ==="
+found=0
+
+if command -v lsof >/dev/null 2>&1; then
+  if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null; then
+    found=1
+  fi
+fi
+
+if [ "$found" -eq 0 ] && command -v ss >/dev/null 2>&1; then
+  ss_output="$(ss -H -ltnp "sport = :$PORT" 2>/dev/null || true)"
+  if [ -n "$ss_output" ]; then
+    echo "State Recv-Q Send-Q Local Address:Port Peer Address:Port Process"
+    echo "$ss_output"
+    found=1
+  fi
+fi
+
+if [ "$found" -eq 0 ] && command -v netstat >/dev/null 2>&1; then
+  netstat_output="$(netstat -an 2>/dev/null | grep -E "([.:])${PORT}[[:space:]].*LISTEN" || true)"
+  if [ -n "$netstat_output" ]; then
+    echo "$netstat_output"
+    found=1
+  fi
+fi
+
+if [ "$found" -eq 0 ]; then
+  echo "No TCP listener found on port $PORT."
+fi
+
+exit 0
+PC
+chmod +x "$BRIDGE_ROOT"/scripts/mac_*.sh "$BRIDGE_ROOT/scripts/port_check.sh"
+c_green "  ✓ scripts installed: ping, hello, run_claude, mac_health, mac_ram, mac_disk, mac_top, mac_network, port_check"
 
 # ─── 5b. Fetch the single-file Cowork client (one source of truth) ───────────
 # bridge_client.py is the EXACT file the Cowork sandbox imports. To avoid drift,
@@ -530,7 +583,7 @@ Always pass a unique \`idempotency_key\` — Claude Code tasks have side effects
 retry must not run twice.
 
 ## Step 3 — quick system checks (no agent)
-\`call_remote("scripts/mac_health.sh")\` · \`mac_ram.sh\` · \`mac_disk.sh\` · \`mac_top.sh\` · \`mac_network.sh\`
+\`call_remote("scripts/mac_health.sh")\` · \`mac_ram.sh\` · \`mac_disk.sh\` · \`mac_top.sh\` · \`mac_network.sh\` · \`port_check.sh\`
 
 ## Results
 Dict with exit_code/stdout/stderr. Codes: -1 refused, -2 timeout, -3 internal,
