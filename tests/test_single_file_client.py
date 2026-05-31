@@ -48,22 +48,40 @@ def test_single_file_exposes_public_api():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
     assert hasattr(mod, "call_remote")
+    assert hasattr(mod, "call_remote_streaming")
     assert hasattr(mod, "daemon_alive")
 
 
-def test_call_remote_signature_matches_package():
-    """The single-file call_remote must accept the same params as the package."""
+def _load_single():
     import importlib.util
 
     spec = importlib.util.spec_from_file_location("bridge_client", SINGLE)
     single = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(single)  # type: ignore[union-attr]
+    return single
 
+
+def test_call_remote_signature_matches_package():
+    """The single-file call_remote must accept the same params as the package."""
+    single = _load_single()
     from cowork_to_code_bridge import client as pkg
 
     single_params = set(inspect.signature(single.call_remote).parameters)
     pkg_params = set(inspect.signature(pkg.call_remote).parameters)
     assert single_params == pkg_params, (
         f"call_remote drifted: single-file={sorted(single_params)} "
+        f"package={sorted(pkg_params)}"
+    )
+
+
+def test_streaming_signature_matches_package():
+    """The single-file call_remote_streaming must match the package signature."""
+    single = _load_single()
+    from cowork_to_code_bridge import client as pkg
+
+    single_params = set(inspect.signature(single.call_remote_streaming).parameters)
+    pkg_params = set(inspect.signature(pkg.call_remote_streaming).parameters)
+    assert single_params == pkg_params, (
+        f"call_remote_streaming drifted: single-file={sorted(single_params)} "
         f"package={sorted(pkg_params)}"
     )

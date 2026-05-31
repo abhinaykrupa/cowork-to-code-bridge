@@ -19,6 +19,45 @@ Because Claude Code can run things on your Mac, a useful **side benefit** is tha
 
 ---
 
+## How it works
+
+Cowork can't reach your Mac directly (it's sandboxed). So the bridge uses a folder both sides can see: Cowork **writes** a task into it, a small helper on your Mac **runs** it (handing real work to Claude Code), and **writes the result back**. No open ports, no servers, no network calls between them.
+
+```
+   ☁️  CLAUDE COWORK (cloud sandbox)                 🍎  YOUR MAC
+   ───────────────────────────────                  ─────────────────────────────────
+   You: "build me an app"                            launchd keeps the daemon running
+            │                                         (auto-starts on login, survives
+            ▼                                          reboots)
+   cowork-to-code-bridge skill                                    ▲
+   (auto-loaded in every session)                                 │
+            │                                                      │
+            │ 1. write task ─────────►  ┌───────────────────────┐  │
+            │                           │   shared bridge folder │  │
+            │                           │   queue/   ◄───────────┼──┘ 2. daemon picks
+            │                           │   results/ ────────────┼──┐    up the task
+            │ 4. read result ◄──────────│   progress/ (live log) │  │
+            │    (+ live progress)      └───────────────────────┘  │ 3. runs it:
+            ▼                                                       │    run_claude.sh
+   Claude shows you the output                                     ▼    → Claude Code
+                                                          a REAL Claude Code agent
+                                                          builds / tests / commits,
+                                                          streaming output as it goes
+```
+
+**The four moving parts:**
+
+| Part | Where | What it does |
+|---|---|---|
+| **Skill** | Every Cowork session (`~/.claude/skills/`) | Auto-loaded; turns your plain-English request into a task and reads back the result. No install inside Cowork. |
+| **Shared folder** | `~/.cowork-to-code-bridge/` | The hand-off point: `queue/` (tasks in), `results/` (answers out), `progress/` (live output for long jobs). |
+| **Daemon** | Your Mac, run by `launchd` | Watches `queue/`, runs only whitelisted scripts, writes results. Auto-restarts on reboot. |
+| **`run_claude.sh`** | Your Mac | Hands the task to a real **Claude Code** agent — that's what builds the actual product. |
+
+**Why it's safe:** no network listener (nothing can connect in), a secret token gates every request, and the daemon only runs scripts you've approved. **Why it survives crashes:** every task is journaled and marked in-flight; a reboot mid-task is detected and never silently re-run (idempotency keys make retries safe).
+
+---
+
 ## Wait — do you even need this?
 
 **Maybe not.** It depends on *where* you talk to Claude:

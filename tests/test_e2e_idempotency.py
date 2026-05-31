@@ -16,7 +16,7 @@ def bridge(tmp_path, monkeypatch):
     monkeypatch.setenv("BRIDGE_TOKEN", "test-token")
     import cowork_to_code_bridge.daemon as d
     importlib.reload(d)
-    for sub in (d.QUEUE, d.RESULTS, d.PROCESSED, d.INFLIGHT, d.SCRIPTS_DIR):
+    for sub in (d.QUEUE, d.RESULTS, d.PROCESSED, d.INFLIGHT, d.PROGRESS, d.SCRIPTS_DIR):
         sub.mkdir(parents=True, exist_ok=True)
     # Install a script that always succeeds and prints a side-effect counter.
     counter = tmp_path / "counter"
@@ -119,3 +119,19 @@ def test_e2e_bad_script_path_journals_received_then_fails_without_marker(bridge)
     assert res["exit_code"] == -1
     # No in-flight marker.
     assert not (d.INFLIGHT / "1400_aaa.running").exists()
+
+
+def test_e2e_progress_file_written_during_run_and_cleared_after(bridge):
+    """Streaming: the daemon writes a live progress file while the script runs,
+    capturing its output, then removes it once the final result is written."""
+    d, counter = bridge
+    terminal, cache = {}, {}
+    f = _enqueue(d, "1400_str")
+    d.run_one(f, "test-token", terminal, cache)
+
+    # Final result has the output (proves the tee captured it).
+    res = json.loads((d.RESULTS / "1400_str.json").read_text())
+    assert res["exit_code"] == 0
+    assert "ran 1" in res["stdout"]
+    # Progress file is cleaned up after completion (result is authoritative).
+    assert not (d.PROGRESS / "1400_str.log").exists()

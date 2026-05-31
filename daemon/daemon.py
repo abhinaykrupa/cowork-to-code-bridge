@@ -45,6 +45,7 @@ import re
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -56,6 +57,7 @@ QUEUE = BRIDGE_ROOT / "queue"
 RESULTS = BRIDGE_ROOT / "results"
 PROCESSED = BRIDGE_ROOT / "processed"
 INFLIGHT = BRIDGE_ROOT / "inflight"
+PROGRESS = BRIDGE_ROOT / "progress"  # live <id>.log files the client can tail
 JOURNAL = BRIDGE_ROOT / "journal.log"
 POLL_SEC = float(os.environ.get("BRIDGE_POLL_SEC", "1.0"))
 MAX_TIMEOUT_SEC = int(os.environ.get("BRIDGE_MAX_TIMEOUT", "600"))
@@ -240,6 +242,78 @@ def _drain_stale_queue(terminal: dict[str, str]) -> None:
             f.rename(PROCESSED / f.name)
 
 
+def _run_streaming(argv: list[str], cwd: str, env: dict[str, str],
+                   timeout: int, progress_file: Path) -> dict[str, Any]:
+    """Run a subprocess, teeing stdout+stderr to progress_file line-by-line.
+
+    Returns the same result dict shape as the old subprocess.run path:
+      {exit_code, stdout, stderr} on success/failure,
+      {exit_code: -2, error, stdout, stderr} on timeout,
+      {exit_code: -3, error} on internal error.
+
+    The progress file is a best-effort live view (the client tails it). The
+    authoritative output is the captured stdout/stderr returned here.
+    """
+    out_buf: list[str] = []
+    err_buf: list[str] = []
+    try:
+        # Truncate/create the progress file at start.
+        progress_file.write_text("")
+    except OSError:
+        pass
+
+    def _tee(stream, buf, tag):
+        # Read line-by-line; append to in-memory buffer AND the progress file.
+        try:
+            for line in iter(stream.readline, ""):
+                buf.append(line)
+                try:
+                    with progress_file.open("a") as pf:
+                        pf.write(line if tag == "out" else f"[stderr] {line}")
+                except OSError:
+                    pass
+        finally:
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+    try:
+        proc = subprocess.Popen(
+            argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, cwd=cwd, env=env, bufsize=1,
+        )
+    except Exception as e:
+        return {"exit_code": -3, "error": str(e)}
+
+    t_out = threading.Thread(target=_tee, args=(proc.stdout, out_buf, "out"), daemon=True)
+    t_err = threading.Thread(target=_tee, args=(proc.stderr, err_buf, "err"), daemon=True)
+    t_out.start()
+    t_err.start()
+
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        t_out.join(timeout=2)
+        t_err.join(timeout=2)
+        return {
+            "exit_code": -2,
+            "error": f"timeout after {timeout}s",
+            "stdout": "".join(out_buf)[-65536:],
+            "stderr": "".join(err_buf)[-65536:],
+        }
+
+    t_out.join(timeout=5)
+    t_err.join(timeout=5)
+    return {
+        "exit_code": proc.returncode,
+        "stdout": "".join(out_buf)[-65536:],
+        "stderr": "".join(err_buf)[-65536:],
+    }
+
+
 def run_one(cmd_path: Path, token_required: str | None,
             terminal: dict[str, str], idem_cache: dict[str, dict]) -> None:
     cmd_id = cmd_path.stem
@@ -336,31 +410,12 @@ def run_one(cmd_path: Path, token_required: str | None,
     })
     _journal_append({"id": cmd_id, "event": "started", "pid": os.getpid()})
 
-    try:
-        proc = subprocess.run(
-            argv, capture_output=True, text=True, timeout=timeout,
-            cwd=cwd, env=env,
-        )
-        result = {
-            "exit_code": proc.returncode,
-            "stdout": proc.stdout[-65536:],
-            "stderr": proc.stderr[-65536:],
-        }
-    except subprocess.TimeoutExpired as e:
-        def _decode(x):
-            if x is None:
-                return ""
-            if isinstance(x, bytes):
-                return x.decode("utf-8", "replace")
-            return x
-        result = {
-            "exit_code": -2,
-            "error": f"timeout after {timeout}s",
-            "stdout": _decode(e.stdout)[-65536:],
-            "stderr": _decode(e.stderr)[-65536:],
-        }
-    except Exception as e:
-        result = {"exit_code": -3, "error": str(e)}
+    # Stream output to a live progress file so the client can show progress
+    # while long tasks (builds, test runs) are still running, instead of waiting
+    # blind for the final result. The progress file is best-effort and append-
+    # only; the authoritative result is still the result JSON written below.
+    progress_file = PROGRESS / f"{cmd_id}.log"
+    result = _run_streaming(argv, cwd, env, timeout, progress_file)
 
     # Order matters: result file first (durable), then journal completed (so
     # recovery sees terminal status), then clear in-flight marker, then move
@@ -371,12 +426,14 @@ def run_one(cmd_path: Path, token_required: str | None,
     if idem_key:
         idem_cache.setdefault(idem_key, result)
     _inflight_clear(cmd_id)
+    # The result file is now authoritative; drop the live progress file.
+    (PROGRESS / f"{cmd_id}.log").unlink(missing_ok=True)
     cmd_path.rename(PROCESSED / cmd_path.name)
     log(f"  ✓ {cmd_id}: exit={result['exit_code']}")
 
 
 def main() -> int:
-    for d in (BRIDGE_ROOT, QUEUE, RESULTS, PROCESSED, INFLIGHT, SCRIPTS_DIR):
+    for d in (BRIDGE_ROOT, QUEUE, RESULTS, PROCESSED, INFLIGHT, PROGRESS, SCRIPTS_DIR):
         d.mkdir(parents=True, exist_ok=True)
 
     env = load_env()

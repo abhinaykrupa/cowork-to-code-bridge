@@ -25,7 +25,7 @@ def bridge(tmp_path, monkeypatch):
     import importlib
     import cowork_to_code_bridge.daemon as d
     importlib.reload(d)
-    for sub in (d.QUEUE, d.RESULTS, d.PROCESSED, d.INFLIGHT, d.SCRIPTS_DIR):
+    for sub in (d.QUEUE, d.RESULTS, d.PROCESSED, d.INFLIGHT, d.PROGRESS, d.SCRIPTS_DIR):
         sub.mkdir(parents=True, exist_ok=True)
     return d
 

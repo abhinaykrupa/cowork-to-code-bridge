@@ -61,6 +61,26 @@ print(r["stdout"])   # what the local Claude Code agent did + reported
 can edit/commit/push, so if the connection drops and you retry, the key makes the
 daemon return the cached result instead of running the agent twice.
 
+### Long tasks — stream live progress (don't wait blind)
+
+Builds and test runs can take minutes. Use `call_remote_streaming` so you see
+output as it happens and can relay progress to the user instead of going silent:
+
+```python
+from bridge_client import call_remote_streaming
+def show(chunk): print(chunk, end="")   # or summarize to the user as it streams
+r = call_remote_streaming(
+    "scripts/run_claude.sh",
+    args=["Set up the project, install deps, run the build", "/Users/<them>/projects/app"],
+    timeout=900, idempotency_key="build-app-1", on_progress=show,
+)
+print(r["exit_code"])
+```
+
+Tell the user what's happening as chunks arrive (e.g. "installing deps…",
+"running tests…") rather than leaving them waiting. Same final result + same
+idempotency guarantees as `call_remote`.
+
 ## Step 3 — quick fixed actions (no agent needed)
 
 For simple, fast system queries, call a ready-made script directly:

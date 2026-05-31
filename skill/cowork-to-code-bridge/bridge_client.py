@@ -132,6 +132,52 @@ def call_remote(
     )
 
 
+def call_remote_streaming(script, args=None, timeout=600, poll_interval=1.0,
+                          cwd=None, env=None, bridge_root=None,
+                          idempotency_key=None, on_progress=None) -> dict[str, Any]:
+    """Like call_remote, but streams live output while the task runs.
+
+    The daemon tees the script's output to progress/<id>.log; this polls it and
+    calls on_progress(new_text) for each new chunk (or prints it if on_progress
+    is None). Use for long tasks (builds, test runs) so they're not blind.
+    Returns the same final result dict as call_remote.
+    """
+    root = Path(bridge_root) if bridge_root else _resolve_bridge_root()
+    queue = root / "queue"; results = root / "results"; progress = root / "progress"
+    queue.mkdir(parents=True, exist_ok=True); results.mkdir(parents=True, exist_ok=True)
+    cmd_id = f"{int(time.time())}_{uuid.uuid4().hex[:8]}"
+    payload: dict[str, Any] = {"id": cmd_id, "script": script, "args": args or [],
+                               "timeout": timeout, "ts_submitted": time.time()}
+    if cwd: payload["cwd"] = cwd
+    if env: payload["env"] = env
+    if idempotency_key: payload["idempotency_key"] = idempotency_key
+    token = _load_token(root)
+    if token: payload["token"] = token
+    cmd_file = queue / f"{cmd_id}.json"
+    tmp = cmd_file.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload)); tmp.rename(cmd_file)
+    result_file = results / f"{cmd_id}.json"
+    progress_file = progress / f"{cmd_id}.log"
+    emit = on_progress or (lambda chunk: print(chunk, end="", flush=True))
+    seen = 0
+    deadline = time.time() + timeout + 5
+    while time.time() < deadline:
+        try:
+            if progress_file.exists():
+                data = progress_file.read_text()
+                if len(data) > seen:
+                    emit(data[seen:]); seen = len(data)
+        except OSError:
+            pass
+        if result_file.exists():
+            try:
+                return json.loads(result_file.read_text())
+            except json.JSONDecodeError:
+                time.sleep(poll_interval); continue
+        time.sleep(poll_interval)
+    raise TimeoutError(f"bridge: no result for {cmd_id} within {timeout + 5}s.")
+
+
 def daemon_alive(bridge_root: Path | str | None = None, ping_timeout: int = 10) -> bool:
     """Quick health check — submits the ping script and waits for exit_code==0."""
     try:
