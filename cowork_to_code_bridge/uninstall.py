@@ -144,19 +144,53 @@ def remove_skill() -> bool:
     return False
 
 
-def pip_uninstall(assume_yes: bool) -> bool:
-    """Uninstall the package using the SAME interpreter this script is running under.
+def _is_installed() -> bool:
+    """True if the package is importable under this interpreter."""
+    r = subprocess.run(
+        [sys.executable, "-c", "import cowork_to_code_bridge"],
+        capture_output=True, check=False,
+    )
+    return r.returncode == 0
 
-    This avoids the common failure where `pip uninstall` runs under a different
-    Python than the one that installed the package.
+
+def pip_uninstall(assume_yes: bool) -> bool:
+    """Uninstall the package, handling --user / PEP 668 (externally-managed).
+
+    Tries a plain `pip uninstall`; if pip refuses because the environment is
+    externally managed (Homebrew/system Python), retries with
+    --break-system-packages. Verifies the package is actually gone afterward and
+    reports honestly. Uses the SAME interpreter this script runs under.
     """
     if not confirm(f"Uninstall the {PACKAGE_NAME} Python package?", assume_yes):
         print(f"  kept {PACKAGE_NAME} package")
         return False
-    cmd = [sys.executable, "-m", "pip", "uninstall", "-y", PACKAGE_NAME]
-    print(f"  running: {' '.join(cmd)}")
-    result = subprocess.run(cmd, check=False)
-    return result.returncode == 0
+
+    if not _is_installed():
+        print(f"  ({PACKAGE_NAME} not importable here — nothing to uninstall under this Python)")
+        return True
+
+    base = [sys.executable, "-m", "pip", "uninstall", "-y", PACKAGE_NAME]
+    print(f"  running: {' '.join(base)}")
+    result = subprocess.run(base, capture_output=True, text=True, check=False)
+    out = (result.stdout or "") + (result.stderr or "")
+
+    # PEP 668: externally-managed environment refuses the uninstall.
+    if result.returncode != 0 and "externally-managed-environment" in out:
+        retry = [*base, "--break-system-packages"]
+        print("  ! externally-managed Python — retrying with --break-system-packages")
+        result = subprocess.run(retry, capture_output=True, text=True, check=False)
+        out = (result.stdout or "") + (result.stderr or "")
+
+    if not _is_installed():
+        return True  # gone — success regardless of pip's exit nuance
+
+    # Still importable: surface why so the user can finish manually.
+    print(yellow("  ! could not fully remove the package automatically."))
+    tail = out.strip().splitlines()[-3:] if out.strip() else []
+    for line in tail:
+        print(f"    {line}")
+    print(f"    Finish manually with: {sys.executable} -m pip uninstall -y {PACKAGE_NAME}")
+    return False
 
 
 def main() -> int:
