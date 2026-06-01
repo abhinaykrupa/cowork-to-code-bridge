@@ -56,7 +56,9 @@ jobs:
         uses: Vampire/setup-wsl@v6
         with:
           distribution: Ubuntu-22.04
+          set-as-default: true
 
+      # setup-wsl registers shell "wsl-bash" (not wsl-shell-<distro>). See Vampire/setup-wsl README.
       - name: WSL syntax check and environment
-        shell: wsl-shell-Ubuntu-22.04
+        shell: wsl-bash
         run: bash scripts/ci-wsl-smoke.sh
