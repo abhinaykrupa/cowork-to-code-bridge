@@ -49,13 +49,14 @@ jobs:
       - uses: actions/checkout@v4
 
       # WSL starts in $HOME, not the Windows workspace — map path and cd first.
+
       - name: WSL syntax check and environment
         shell: pwsh
         run: |
-          $repo = (wsl wslpath -a "$env:GITHUB_WORKSPACE").Trim()
-          wsl bash -lc "set -euo pipefail
-            cd '$repo'
-            bash -n install.sh
-            bash -n scripts/lib/platform.sh
-            grep -qiE 'microsoft|wsl' /proc/version
-            echo WSL detected"
+          $ErrorActionPreference = 'Stop'
+          # pwsh eats backslashes before native exe args; forward slashes work with wslpath.
+          $winPath = "$env:GITHUB_WORKSPACE" -replace '\\', '/'
+          $repo = (wsl.exe wslpath -a $winPath).Trim()
+          if (-not $repo) { throw "wslpath failed for: $winPath" }
+          Write-Host "WSL repo path: $repo"
+          wsl.exe bash -lc "cd '$repo' && sed -i 's/\r$//' install.sh scripts/lib/platform.sh && bash -n install.sh && bash -n scripts/lib/platform.sh && grep -qiE 'microsoft|wsl' /proc/version && echo WSL detected"
