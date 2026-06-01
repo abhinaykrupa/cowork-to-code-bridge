@@ -18,8 +18,16 @@ Repo: https://github.com/abhinaykrupa/cowork-to-code-bridge
 
 ## Show HN
 
-**Title:**
+**Title** (pick the one that feels most you — HN titles are make-or-break; concrete > clever):
 > Show HN: Let Claude run code on your real machine, from any Claude chat (macOS/Linux)
+
+Alternatives:
+> Show HN: A bridge so Claude in the browser can build and run code on your machine
+> Show HN: Cowork-to-code-bridge – give Claude Cowork a real shell on your Mac/Linux, safely
+> Show HN: I connected Claude's browser sandbox to Claude Code on my laptop
+
+Tip: lead the first comment (not the title) with the concrete demo story — the
+"scaffold a Flask app, run it, curl it, report {status:ok}" round trip. Show, don't claim.
 
 **Body:**
 > Claude in the browser (Cowork) is great at planning and editing, but it runs in a
