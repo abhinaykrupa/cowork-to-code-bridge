@@ -48,6 +48,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # WSL starts in $HOME, not the Windows workspace — map path and cd first.
       - name: WSL syntax check and environment
+        shell: pwsh
         run: |
-          wsl bash -c "bash -n install.sh && grep -qi microsoft /proc/version && echo WSL detected"
+          $repo = (wsl wslpath -a "$env:GITHUB_WORKSPACE").Trim()
+          wsl bash -lc "set -euo pipefail
+            cd '$repo'
+            bash -n install.sh
+            bash -n scripts/lib/platform.sh
+            grep -qiE 'microsoft|wsl' /proc/version
+            echo WSL detected"
