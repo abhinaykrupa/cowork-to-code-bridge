@@ -508,8 +508,76 @@ fi
 
 exit 0
 PC
-chmod +x "$BRIDGE_ROOT"/scripts/mac_*.sh "$BRIDGE_ROOT/scripts/port_check.sh"
-c_green "  ✓ scripts installed: ping, hello, run_claude, mac_health, mac_ram, mac_disk, mac_top, mac_network, port_check"
+cat > "$BRIDGE_ROOT/scripts/docker_ps.sh" <<'DPS'
+#!/usr/bin/env bash
+# docker_ps.sh — list running Docker containers (macOS or Linux).
+# Args: none.
+set -u
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Docker is not installed or not in PATH." >&2
+  exit 1
+fi
+
+if ! docker info >/dev/null 2>&1; then
+  echo "Docker is installed but the daemon is not running or not reachable." >&2
+  exit 1
+fi
+
+echo "=== RUNNING DOCKER CONTAINERS ==="
+docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
+
+exit 0
+DPS
+cat > "$BRIDGE_ROOT/scripts/pkg_outdated.sh" <<'POD'
+#!/usr/bin/env bash
+# pkg_outdated.sh — list outdated system packages (macOS or Linux).
+# Detects the package manager: brew on macOS; apt/dnf/yum/pacman on Linux.
+# Args: none.
+set -u
+
+echo "=== OUTDATED PACKAGES ==="
+found=0
+
+if command -v brew >/dev/null 2>&1; then
+  echo "--- Homebrew (brew outdated) ---"
+  brew outdated || true
+  found=1
+fi
+
+if [ "$found" -eq 0 ] && command -v apt >/dev/null 2>&1; then
+  echo "--- APT (apt list --upgradable) ---"
+  apt list --upgradable 2>/dev/null || true
+  found=1
+fi
+
+if [ "$found" -eq 0 ] && command -v dnf >/dev/null 2>&1; then
+  echo "--- DNF (dnf check-update) ---"
+  # dnf check-update exits 100 when updates exist; don't treat that as an error.
+  dnf check-update || true
+  found=1
+fi
+
+if [ "$found" -eq 0 ] && command -v yum >/dev/null 2>&1; then
+  echo "--- YUM (yum check-update) ---"
+  yum check-update || true
+  found=1
+fi
+
+if [ "$found" -eq 0 ] && command -v pacman >/dev/null 2>&1; then
+  echo "--- pacman (pacman -Qu) ---"
+  pacman -Qu || true
+  found=1
+fi
+
+if [ "$found" -eq 0 ]; then
+  echo "No supported package manager found (looked for brew, apt, dnf, yum, pacman)."
+fi
+
+exit 0
+POD
+chmod +x "$BRIDGE_ROOT"/scripts/mac_*.sh "$BRIDGE_ROOT/scripts/port_check.sh" "$BRIDGE_ROOT/scripts/docker_ps.sh" "$BRIDGE_ROOT/scripts/pkg_outdated.sh"
+c_green "  ✓ scripts installed: ping, hello, run_claude, mac_health, mac_ram, mac_disk, mac_top, mac_network, port_check, docker_ps, pkg_outdated"
 
 # ─── 5b. Fetch the single-file Cowork client (one source of truth) ───────────
 # bridge_client.py is the EXACT file the Cowork sandbox imports. To avoid drift,
@@ -586,7 +654,7 @@ Always pass a unique \`idempotency_key\` — Claude Code tasks have side effects
 retry must not run twice.
 
 ## Step 3 — quick system checks (no agent)
-\`call_remote("scripts/mac_health.sh")\` · \`mac_ram.sh\` · \`mac_disk.sh\` · \`mac_top.sh\` · \`mac_network.sh\` · \`port_check.sh\`
+\`call_remote("scripts/mac_health.sh")\` · \`mac_ram.sh\` · \`mac_disk.sh\` · \`mac_top.sh\` · \`mac_network.sh\` · \`port_check.sh\` · \`docker_ps.sh\` · \`pkg_outdated.sh\`
 
 ## Results
 Dict with exit_code/stdout/stderr. Codes: -1 refused, -2 timeout, -3 internal,
@@ -629,7 +697,7 @@ Always pass a unique idempotency_key (tasks have side effects). For long builds,
 use call_remote_streaming(..., on_progress=cb).
 
 ## Quick checks (no agent)
-scripts/mac_health.sh · mac_ram.sh · mac_disk.sh · mac_top.sh · mac_network.sh · port_check.sh <port>
+scripts/mac_health.sh · mac_ram.sh · mac_disk.sh · mac_top.sh · mac_network.sh · port_check.sh <port> · docker_ps.sh · pkg_outdated.sh
 
 Results: dict with exit_code/stdout/stderr (-1 refused, -2 timeout, -3 internal,
 -4 crashed). Never claim success without exit_code 0 / BRIDGE LIVE.

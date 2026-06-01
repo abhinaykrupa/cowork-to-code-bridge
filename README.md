@@ -153,6 +153,8 @@ The install gives you these to start:
 - `mac_top.sh` — top processes by CPU and memory
 - `mac_network.sh` — network status and connectivity
 - `port_check.sh` — shows what is listening on a TCP port
+- `docker_ps.sh` — lists running Docker containers
+- `pkg_outdated.sh` — lists outdated packages (brew on macOS; apt/dnf/yum/pacman on Linux)
 - `ping.sh` — confirms the bridge works
 - `hello.sh` — echoes back a greeting
 
