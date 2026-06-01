@@ -33,6 +33,7 @@ jobs:
           bash -n install.sh
           bash -n daemon/uninstall.sh
           bash -n scripts/lib/platform.sh
+          bash -n scripts/ci-wsl-smoke.sh
           bash -n tests/test_platform_detection.sh
           for s in examples/allowed_scripts/*.sh; do bash -n "$s"; done
 
@@ -48,16 +49,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # WSL starts in $HOME, not the Windows workspace — map path and cd first.
+      # GHA windows runners enable WSL but ship NO Linux distro by default.
+      # wsl.exe wslpath then prints "no installed distributions" to stdout (not a path).
+      # See: https://github.com/actions/runner-images/issues/12646
+      - name: Install WSL Ubuntu
+        uses: Vampire/setup-wsl@v6
+        with:
+          distribution: Ubuntu-22.04
 
       - name: WSL syntax check and environment
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          # pwsh strips backslashes in native exe args; use forward slashes for wslpath.
-          # (.Replace avoids regex; -replace '\\\\' does NOT convert paths — verified locally.)
-          $winPath = "$env:GITHUB_WORKSPACE".Replace('\', '/')
-          $repo = (wsl.exe wslpath -a $winPath).Trim()
-          if (-not $repo) { throw "wslpath failed for: $winPath" }
-          Write-Host "WSL repo path: $repo"
-          wsl.exe bash -lc "cd '$repo' && sed -i 's/\r$//' install.sh scripts/lib/platform.sh && bash -n install.sh && bash -n scripts/lib/platform.sh && grep -qiE 'microsoft|wsl' /proc/version && echo WSL detected"
+        shell: wsl-shell-Ubuntu-22.04
+        run: bash scripts/ci-wsl-smoke.sh
