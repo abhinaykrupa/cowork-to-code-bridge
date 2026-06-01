@@ -58,7 +58,13 @@ jobs:
           distribution: Ubuntu-22.04
           set-as-default: true
 
-      # setup-wsl registers shell "wsl-bash" (not wsl-shell-<distro>). See Vampire/setup-wsl README.
       - name: WSL syntax check and environment
-        shell: wsl-bash
-        run: bash scripts/ci-wsl-smoke.sh
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $winPath = "$env:GITHUB_WORKSPACE".Replace('\', '/')
+          # Default distro (setup-wsl set-as-default); do not hardcode Ubuntu-22.04 vs Ubuntu.
+          $repo = (wsl.exe wslpath -a $winPath).Trim()
+          if ($repo -notmatch '^/') { throw "wslpath failed (no WSL distro?): $repo" }
+          Write-Host "WSL repo path: $repo"
+          wsl.exe -e bash -lc "export GITHUB_WORKSPACE='$winPath'; bash '$repo/scripts/ci-wsl-smoke.sh'"
