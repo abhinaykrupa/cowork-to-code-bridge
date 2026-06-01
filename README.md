@@ -5,7 +5,7 @@
 [![Release](https://img.shields.io/github/v/release/abhinaykrupa/cowork-to-code-bridge?display_name=tag)](https://github.com/abhinaykrupa/cowork-to-code-bridge/releases)
 [![Downloads](https://img.shields.io/github/downloads/abhinaykrupa/cowork-to-code-bridge/total?logo=github)](https://github.com/abhinaykrupa/cowork-to-code-bridge/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)](#)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20WSL2-lightgrey)](#)
 
 **Let Claude run code on your real machine — safely — from any Claude chat.**
 
@@ -13,7 +13,7 @@
   <img src="./docs/demo.svg" alt="Cowork hands a 'build me a Flask app' task to Claude Code on your machine; it scaffolds, installs, runs, and verifies it — then reports back." width="100%">
 </p>
 
-> 🖥️ **macOS & Linux.** Works on your Mac (launchd) or a Linux box/server (systemd). Windows isn't supported yet.
+> 🖥️ **macOS, Linux, and WSL2.** Works on your Mac (launchd), a Linux box/server (systemd), or **Windows via WSL2** (same systemd path). Native Windows isn't supported yet — see [docs/WSL.md](docs/WSL.md).
 
 [Claude Cowork](https://claude.ai/cowork) (and Claude in your browser) is great at planning and editing, but it runs in a sealed cloud sandbox — it can't reach your actual machine. **Claude Code**, running on your computer, *can*: it has your shell, your repos, your tools, and full agent abilities.
 
@@ -55,7 +55,11 @@ Claude hands the work to Claude Code on your machine and brings the result back.
 
 > **Why the second paste?** Cowork's sandbox can't see your machine until you grant it access to the bridge folder — that's a one-time permission per chat, and the connect line is what triggers it. No downloads, no `/plugin`, no popups beyond that single folder-access approval. (Once a chat is connected it stays connected; a brand-new chat needs the line again.)
 
-> **Don't have Python 3.10+?** The installer handles it: if it finds only Apple's stock Python (3.8), it installs a modern one for you (via Homebrew, installing Homebrew first if needed). That part can take a few minutes and may ask for your Mac password — that's normal. Skip it with `BRIDGE_PYTHON_AUTOINSTALL=0`.
+> **Don't have Python 3.10+?** On **macOS**, the installer can install Python via Homebrew (and Homebrew first if needed). On **Linux/WSL**, use your distro packages (`apt install python3.12`, etc.). Skip auto-install on Mac with `BRIDGE_PYTHON_AUTOINSTALL=0`.
+
+### Windows (WSL2)
+
+On Windows, install **inside WSL2** (Ubuntu), not PowerShell or Git Bash. You need [systemd enabled in WSL](docs/WSL.md#1-enable-systemd-in-wsl), then the same one-liner in your Ubuntu terminal. Full walkthrough: **[docs/WSL.md](docs/WSL.md)**.
 
 <details>
 <summary>What the installer puts where (for the curious / developers)</summary>
@@ -356,7 +360,7 @@ The realistic threats this *can't* defend against:
 ## FAQ
 
 **Q: Does this work on Linux or Windows?**
-Right now it's Mac-only because the installer uses `launchd` (macOS's service manager). The core code is cross-platform — adding Linux (systemd) and Windows (Task Scheduler) support is on the roadmap.
+**macOS** (launchd), **Linux** (systemd --user), and **WSL2 on Windows** (systemd in your Ubuntu distro) are supported. **Native Windows** (PowerShell, Task Scheduler) is not — use WSL2; see [docs/WSL.md](docs/WSL.md).
 
 **Q: Does it cost anything?**
 No. It's free and open source (MIT).
@@ -408,9 +412,9 @@ Developers: the full crash-recovery model (the journal, in-flight markers, and t
 
 ## Status & contributing
 
-**v0.5.0** — early, but solid. The core works, survives crashes and reboots without repeating risky actions, installs as a global skill (one command), streams live progress for long tasks, and runs on macOS + Linux. Built for myself, open-sourced because it's useful to others. See the [CHANGELOG](CHANGELOG.md) for the full history.
+**v0.5.0** — early, but solid. The core works, survives crashes and reboots without repeating risky actions, installs as a global skill (one command), streams live progress for long tasks, and runs on macOS, Linux, and WSL2. Built for myself, open-sourced because it's useful to others. See the [CHANGELOG](CHANGELOG.md) for the full history.
 
-PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Browse [open issues](https://github.com/abhinaykrupa/cowork-to-code-bridge/issues) to find something to work on. Issues triaged best-effort. Not "production-grade" until tagged `v1.0.0`. macOS & Linux; Windows not yet supported.
+PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Browse [open issues](https://github.com/abhinaykrupa/cowork-to-code-bridge/issues) to find something to work on. Issues triaged best-effort. Not "production-grade" until tagged `v1.0.0`. macOS, Linux, and WSL2; native Windows not yet supported.
 
 ## License
 

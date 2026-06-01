@@ -9,9 +9,9 @@ Start with a [good first issue →](https://github.com/abhinaykrupa/cowork-to-co
 
 ## Ground rules
 
-- **macOS only** for now. The daemon relies on `launchd` and Mac system tools.
-  Cross-platform (systemd / Windows) support is a welcome contribution but is a
-  bigger lift — open an issue first.
+- **Platforms:** macOS (launchd), Linux (systemd --user), and WSL2 (same systemd
+  path inside Ubuntu). Native Windows (Task Scheduler) is not implemented yet —
+  open an issue before a large Windows-only PR.
 - **No new runtime dependencies.** The client and daemon are deliberately pure
   Python standard library. Keep them dependency-free.
 - **Don't break the safety model.** The daemon must only run whitelisted scripts,

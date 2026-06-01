@@ -32,7 +32,39 @@ jobs:
         run: |
           bash -n install.sh
           bash -n daemon/uninstall.sh
+          bash -n scripts/lib/platform.sh
+          bash -n scripts/ci-wsl-smoke.sh
+          bash -n tests/test_platform_detection.sh
           for s in examples/allowed_scripts/*.sh; do bash -n "$s"; done
+
+      - name: Platform detection tests
+        if: runner.os == 'Linux'
+        run: bash tests/test_platform_detection.sh
 
       - name: Tests
         run: pytest -q
+
+  wsl-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # GHA windows runners enable WSL but ship NO Linux distro by default.
+      # wsl.exe wslpath then prints "no installed distributions" to stdout (not a path).
+      # See: https://github.com/actions/runner-images/issues/12646
+      - name: Install WSL Ubuntu
+        uses: Vampire/setup-wsl@v6
+        with:
+          distribution: Ubuntu-22.04
+          set-as-default: true
+
+      - name: WSL syntax check and environment
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $winPath = "$env:GITHUB_WORKSPACE".Replace('\', '/')
+          # Default distro (setup-wsl set-as-default); do not hardcode Ubuntu-22.04 vs Ubuntu.
+          $repo = (wsl.exe wslpath -a $winPath).Trim()
+          if ($repo -notmatch '^/') { throw "wslpath failed (no WSL distro?): $repo" }
+          Write-Host "WSL repo path: $repo"
+          wsl.exe -e bash -lc "export GITHUB_WORKSPACE='$winPath'; bash '$repo/scripts/ci-wsl-smoke.sh'"
