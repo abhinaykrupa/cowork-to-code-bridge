@@ -3,6 +3,10 @@
 Thanks for your interest. This is a small, single-author project; PRs and issues
 are welcome and triaged best-effort.
 
+## New here?
+
+Start with a [good first issue →](https://github.com/abhinaykrupa/cowork-to-code-bridge/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
+
 ## Ground rules
 
 - **macOS only** for now. The daemon relies on `launchd` and Mac system tools.
