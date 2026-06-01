@@ -32,6 +32,15 @@ ruff check .       # lint
 bash -n install.sh # shell syntax check
 ```
 
+If you prefer shortcuts, the repository `Makefile` mirrors the core local workflow:
+
+```bash
+make install
+make test
+make lint
+make uninstall
+```
+
 All of these run in CI on every PR (see `.github/workflows/ci.yml`). PRs should
 keep the suite green.
 
