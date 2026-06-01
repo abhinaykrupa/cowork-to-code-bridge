@@ -379,6 +379,22 @@ Three protections:
 
 If you want even more conservative: review every Claude suggestion before agreeing to run it.
 
+**Q: How do I restrict what Claude Code can do on a task?**
+Set `CLAUDE_FLAGS` in your environment before the bridge invokes Claude Code. Three recipes, from cautious to locked-down:
+
+```bash
+# 1. Plan-only: Claude can read and suggest, but never edit or run anything
+CLAUDE_FLAGS="--permission-mode plan"
+
+# 2. Edit-only: allow file edits, block shell commands
+CLAUDE_FLAGS="--permission-mode plan --allowedTools Edit,Write,Read,Glob,Grep"
+
+# 3. Full agent, scoped to one repo (block network & system commands)
+CLAUDE_FLAGS="--allowedTools Edit,Write,Read,Glob,Grep,Bash --disallowedTools WebFetch,WebSearch"
+```
+
+Export the variable in your shell profile or set it in the bridge's launchd/systemd unit file. See `run_claude.sh` for where `CLAUDE_FLAGS` is consumed.
+
 **Q: What happens if my Mac crashes or reboots while something is running?**
 You're covered. The bridge restarts itself automatically, and it's careful not to repeat anything dangerous:
 - An action that was *mid-run* when the crash hit is reported as "didn't finish — status unknown" rather than quietly run again. So a half-finished `git push` won't accidentally fire twice.

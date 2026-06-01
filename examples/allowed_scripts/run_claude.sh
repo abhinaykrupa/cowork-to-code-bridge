@@ -110,8 +110,13 @@ fi
 log "using claude at: $CLAUDE_BIN"
 cd "$WORKDIR" || { log "cannot cd to $WORKDIR"; exit 1; }
 
-# CLAUDE_FLAGS: tune to set the trust/permission scope for Cowork-originated
-# tasks. To sandbox harder: --permission-mode plan, or --allowedTools "...".
-CLAUDE_FLAGS=(-p "$TASK" --output-format text)
+# CLAUDE_FLAGS (env): set the trust/permission scope for Cowork-originated tasks.
+# If you export CLAUDE_FLAGS in the environment (e.g. in the launchd/systemd unit
+# or your shell profile), those flags are passed to Claude Code. Examples:
+#   CLAUDE_FLAGS="--permission-mode plan"                  # plan-only, no edits/exec
+#   CLAUDE_FLAGS="--allowedTools Edit,Write,Read,Glob,Grep" # edits only, no shell
+# Unset/empty = the default (full agent). The task prompt + output format are
+# always appended and can't be overridden.
+read -r -a EXTRA_FLAGS <<< "${CLAUDE_FLAGS:-}"
 
-exec "$CLAUDE_BIN" "${CLAUDE_FLAGS[@]}"
+exec "$CLAUDE_BIN" "${EXTRA_FLAGS[@]}" -p "$TASK" --output-format text

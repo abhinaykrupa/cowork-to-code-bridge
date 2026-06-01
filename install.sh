@@ -379,9 +379,12 @@ MSG
 fi
 log "using claude at: $CLAUDE_BIN"
 cd "$WORKDIR" || { log "cannot cd to $WORKDIR"; exit 1; }
-# To restrict Cowork-originated tasks, edit these flags
-# (e.g. --permission-mode plan, or --allowedTools "...").
-exec "$CLAUDE_BIN" -p "$TASK" --output-format text
+# CLAUDE_FLAGS (env): restrict Cowork-originated tasks. Examples:
+#   CLAUDE_FLAGS="--permission-mode plan"                   # plan-only
+#   CLAUDE_FLAGS="--allowedTools Edit,Write,Read,Glob,Grep" # edits only, no shell
+# Unset = full agent. The prompt + output format are always appended.
+read -r -a EXTRA_FLAGS <<< "${CLAUDE_FLAGS:-}"
+exec "$CLAUDE_BIN" "${EXTRA_FLAGS[@]}" -p "$TASK" --output-format text
 RUNCLAUDE
 chmod +x "$BRIDGE_ROOT/scripts/run_claude.sh"
 
