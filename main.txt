@@ -1,0 +1,119 @@
+#!/bin/bash
+
+# list_scripts.sh - Scan ~/.cowork-to-code-bridge/scripts/ and print each script's
+# filename and one-line description (extracted from a comment in the script).
+# This enables Cowork to self-document available scripts at runtime.
+
+set -euo pipefail
+
+# Constants
+SCRIPTS_DIR="${HOME}/.cowork-to-code-bridge/scripts"
+DESCRIPTION_REGEX='^[[:space:]]*# ?(.+)$'
+
+# Function to extract one-line description from a script file
+# Arguments:
+#   $1 - Path to the script file
+# Returns:
+#   0 if description found, 1 otherwise
+# Outputs:
+#   The extracted description line (without leading #)
+extract_description() {
+    local file="$1"
+    local description=""
+    
+    # Check if file exists and is readable
+    if [[ ! -f "$file" || ! -r "$file" ]]; then
+        return 1
+    fi
+    
+    # Read first few lines to find description comment
+    while IFS= read -r line; do
+        # Skip shebang line
+        if [[ "$line" =~ ^#! ]]; then
+            continue
+        fi
+        
+        # Check for description comment (lines starting with #)
+        if [[ "$line" =~ $DESCRIPTION_REGEX ]]; then
+            description="${BASH_REMATCH[1]}"
+            # Trim leading/trailing whitespace
+            description="${description## }"
+            description="${description%% }"
+            echo "$description"
+            return 0
+        fi
+        
+        # Stop at first non-comment, non-empty line
+        if [[ -n "$line" && ! "$line" =~ ^[[:space:]]*# ]]; then
+            break
+        fi
+    done < "$file"
+    
+    return 1
+}
+
+# Function to list scripts with descriptions
+list_scripts() {
+    local dir="$1"
+    local script_count=0
+    local description_count=0
+    
+    # Check if directory exists
+    if [[ ! -d "$dir" ]]; then
+        echo "Warning: Directory '$dir' does not exist." >&2
+        return 0
+    fi
+    
+    # Check if directory is readable
+    if [[ ! -r "$dir" ]]; then
+        echo "Error: Directory '$dir' is not readable." >&2
+        return 1
+    fi
+    
+    # Iterate over files in directory
+    while IFS= read -r -d '' file; do
+        # Only process regular files
+        if [[ ! -f "$file" ]]; then
+            continue
+        fi
+        
+        # Get filename without path
+        local filename
+        filename="$(basename "$file")"
+        
+        # Extract description
+        local description
+        if description=$(extract_description "$file"); then
+            echo "${filename}: ${description}"
+            ((description_count++))
+        fi
+        
+        ((script_count++))
+    done < <(find "$dir" -maxdepth 1 -type f -print0 2>/dev/null)
+    
+    # Handle empty directory
+    if [[ "$script_count" -eq 0 ]]; then
+        echo "No scripts found in '$dir'."
+    fi
+    
+    return 0
+}
+
+# Main execution
+main() {
+    # Validate scripts directory
+    if [[ ! -d "$SCRIPTS_DIR" ]]; then
+        echo "Warning: Scripts directory '$SCRIPTS_DIR' does not exist." >&2
+        echo "Creating directory..."
+        mkdir -p "$SCRIPTS_DIR" || {
+            echo "Error: Failed to create directory '$SCRIPTS_DIR'." >&2
+            exit 1
+        }
+    fi
+    
+    # List scripts
+    list_scripts "$SCRIPTS_DIR"
+}
+
+# Run main function
+main "$@"
