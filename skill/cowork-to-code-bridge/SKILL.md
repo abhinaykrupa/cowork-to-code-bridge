@@ -46,8 +46,9 @@ permission to see the folder.
   ```
 
   It takes ~30s, sets up the connection, and survives reboots. After they say
-  it's done, re-run Step 1. (macOS and Linux are supported; if their computer is
-  Windows, this bridge won't work yet — stop and tell them.)
+  it's done, re-run Step 1. (macOS, Linux, and WSL2 with systemd are supported.
+  If they use native Windows without WSL, tell them to install via WSL2 — guide:
+  https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/docs/WSL.md)
 
 ## Step 2 — hand a task to Claude Code on the Mac (the main use)
 

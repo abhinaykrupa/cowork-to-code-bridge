@@ -1,27 +1,30 @@
 # SETUP.md
 
-> **Setup is now a single Mac command — there's nothing to do in Cowork.**
+> **Setup is one command on your machine — then one connect line in Cowork per chat.**
 
 As of v0.4.0 the bridge installs a **global Claude skill**, so it loads into
-every Cowork session automatically. There is no longer any "paste a URL into
-Cowork" / fetch / popup step.
+every Cowork session automatically. Cowork still needs permission to mount the
+bridge folder once per chat (see the installer's connect line).
 
-## Install (the only step)
+## Install (the machine step)
 
-On your Mac, in Terminal:
+On your Mac, Linux server, or **WSL2 Ubuntu** terminal (not PowerShell):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/abhinaykrupa/cowork-to-code-bridge/main/install.sh | bash
 ```
 
 That installs the daemon (auto-starts, reboot-safe) **and** the global skill at
-`~/.claude/skills/cowork-to-code-bridge/`. Done.
+`~/.claude/skills/cowork-to-code-bridge/`. Paste the **connect line** it prints
+into Cowork once per chat.
+
+**Windows users:** use WSL2 — see [docs/WSL.md](docs/WSL.md).
 
 ## Then just talk to Cowork
 
-In any Cowork chat: *"build me an app on my Mac"*, *"run my tests"*,
-*"check my Mac's health"*. The skill triggers, connects, and routes the work to
-Claude Code on your Mac.
+In any Cowork chat: *"build me an app on my machine"*, *"run my tests"*,
+*"check my machine's health"*. The skill triggers, connects, and routes the work to
+Claude Code on your computer.
 
 ## How it works (for maintainers)
 
@@ -32,4 +35,4 @@ Claude Code on your Mac.
 - The canonical skill source is in this repo at
   [`skill/cowork-to-code-bridge/`](./skill/cowork-to-code-bridge/); the installer
   writes it to `~/.claude/skills/`.
-- macOS (launchd) and Linux (systemd) supported; Windows not yet.
+- macOS (launchd), Linux (systemd), and WSL2 (systemd in Ubuntu) supported; native Windows not yet.

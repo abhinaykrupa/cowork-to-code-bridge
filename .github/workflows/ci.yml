@@ -32,7 +32,22 @@ jobs:
         run: |
           bash -n install.sh
           bash -n daemon/uninstall.sh
+          bash -n scripts/lib/platform.sh
+          bash -n tests/test_platform_detection.sh
           for s in examples/allowed_scripts/*.sh; do bash -n "$s"; done
+
+      - name: Platform detection tests
+        if: runner.os == 'Linux'
+        run: bash tests/test_platform_detection.sh
 
       - name: Tests
         run: pytest -q
+
+  wsl-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: WSL syntax check and environment
+        run: |
+          wsl bash -c "bash -n install.sh && grep -qi microsoft /proc/version && echo WSL detected"

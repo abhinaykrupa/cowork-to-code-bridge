@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# install.sh — one-shot Mac installer for cowork-to-code-bridge.
+# install.sh — one-shot installer for cowork-to-code-bridge (macOS, Linux, WSL2).
 #
-# Usage (on Mac terminal):
+# Usage (macOS Terminal, Linux shell, or WSL Ubuntu — not PowerShell/Git Bash):
 #   curl -fsSL https://raw.githubusercontent.com/abhinaykrupa/cowork-to-code-bridge/main/install.sh | bash
 #
 # What this does:
-#   1. Locates a usable Python 3.10+ interpreter (probes python3.13 → 3.10).
+#   1. Locates a usable Python 3.10+ interpreter (probes python3.14 → 3.10, then python3).
 #   2. pip-installs the cowork-to-code-bridge package (PyPI, fallback GitHub main).
 #   3. Creates ~/.cowork-to-code-bridge/ with queue/, results/, processed/, scripts/.
 #   4. Generates BRIDGE_TOKEN and writes it to ~/.cowork-to-code-bridge/.env.
@@ -37,17 +37,51 @@ c_red()    { printf "\033[0;31m%s\033[0m\n" "$1"; }
 step()     { printf "\n\033[1;36m==> %s\033[0m\n" "$1"; }
 
 # ─── 0. Preflight: detect OS / service manager ───────────────────────────────
-# macOS uses launchd; Linux uses systemd --user. We branch the service-manager
-# steps on $OS; everything else (Python, bridge dir, token, scripts, the global
-# skill) is shared.
+# macOS uses launchd; Linux and WSL2 use systemd --user. We branch the
+# service-manager steps on $OS; everything else (Python, bridge dir, token,
+# scripts, the global skill) is shared.
+WSL_DOC="https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/docs/WSL.md"
+
+# Canonical copy also lives in scripts/lib/platform.sh (for tests).
+is_wsl() {
+  [[ -n "${WSL_DISTRO_NAME:-}" ]] || grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null
+}
+_INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || true
+if [[ -n "$_INSTALL_DIR" && -f "$_INSTALL_DIR/scripts/lib/platform.sh" ]]; then
+  # shellcheck source=scripts/lib/platform.sh
+  source "$_INSTALL_DIR/scripts/lib/platform.sh"
+fi
+
 OS="$(uname -s)"
+IS_WSL=0
+if is_wsl; then IS_WSL=1; fi
+
 case "$OS" in
   Darwin)
     SERVICE_MGR="launchd"
+    PLATFORM_NOTE="macOS (launchd)"
     ;;
   Linux)
     if command -v systemctl >/dev/null 2>&1; then
       SERVICE_MGR="systemd"
+      if [[ "$IS_WSL" -eq 1 ]]; then
+        PLATFORM_NOTE="Linux (WSL2, systemd --user)"
+      else
+        PLATFORM_NOTE="Linux (systemd --user)"
+      fi
+    elif [[ "$IS_WSL" -eq 1 ]]; then
+      c_red "✗ WSL2 without systemd is not supported."
+      echo "  Enable systemd in WSL, then re-run this installer:"
+      echo
+      echo "    1. In WSL: sudo tee /etc/wsl.conf >/dev/null <<'EOF'"
+      echo "       [boot]"
+      echo "       systemd=true"
+      echo "       EOF"
+      echo "    2. In Windows PowerShell: wsl --shutdown"
+      echo "    3. Re-open your Ubuntu/WSL app and run this installer again."
+      echo
+      echo "  Full guide: $WSL_DOC"
+      exit 1
     else
       c_red "✗ Linux without systemd is not yet supported."
       echo "  This installer manages the daemon via 'systemctl --user', which"
@@ -56,21 +90,29 @@ case "$OS" in
       exit 1
     fi
     ;;
+  MINGW*|MSYS*|CYGWIN*)
+    c_red "✗ Native Windows shell is not supported."
+    echo "  Run this installer inside WSL2 (Ubuntu), not PowerShell, cmd, or Git Bash."
+    echo "  Open the Ubuntu app (or: wsl), then paste the install command there."
+    echo
+    echo "  Guide: $WSL_DOC"
+    exit 1
+    ;;
   *)
     c_red "✗ Unsupported OS: $OS"
-    echo "  cowork-to-code-bridge supports macOS (launchd) and Linux (systemd)."
-    echo "  Windows is not supported."
+    echo "  Supported: macOS (launchd), Linux (systemd), and WSL2 with systemd."
+    echo "  Native Windows is not supported — use WSL2. Guide: $WSL_DOC"
     exit 1
     ;;
 esac
-c_green "  ✓ OS: $OS (service manager: $SERVICE_MGR)"
+c_green "  ✓ OS: $PLATFORM_NOTE"
 
 # ─── 1. Preflight: locate a Python 3.10+ interpreter ─────────────────────────
 step "Locating Python 3.10+ interpreter"
 
 PY=""
 PY_VER=""
-for candidate in python3.13 python3.12 python3.11 python3.10; do
+for candidate in python3.14 python3.13 python3.12 python3.11 python3.10 python3; do
   if command -v "$candidate" >/dev/null 2>&1; then
     cand_path="$(command -v "$candidate")"
     # Resolve to absolute, dereferenced path so launchd doesn't depend on PATH.
@@ -95,7 +137,7 @@ done
 rescan_python() {
   PY=""; PY_VER=""
   local candidate cand_path resolved ver major minor
-  for candidate in python3.13 python3.12 python3.11 python3.10; do
+  for candidate in python3.14 python3.13 python3.12 python3.11 python3.10 python3; do
     command -v "$candidate" >/dev/null 2>&1 || continue
     cand_path="$(command -v "$candidate")"
     if command -v readlink >/dev/null 2>&1; then
@@ -158,23 +200,41 @@ autoinstall_python() {
 
 if [[ -z "$PY" ]]; then
   installed_ok=0
-  if [[ "$AUTO_PY" == "1" ]] && autoinstall_python && rescan_python; then
+  if [[ "$AUTO_PY" == "1" ]] && [[ "$OS" == "Darwin" ]] && autoinstall_python && rescan_python; then
     installed_ok=1
   fi
   if [[ "$installed_ok" -ne 1 ]]; then
     c_red "  ✗ No Python 3.10+ interpreter available."
     echo
-    echo "  Apple's stock /usr/bin/python3 is too old (3.8) and is intentionally"
-    echo "  ignored here. Install a modern Python, then re-run this installer:"
+    if [[ "$OS" == "Darwin" ]]; then
+      echo "  Apple's stock /usr/bin/python3 is too old (3.8) and is intentionally"
+      echo "  ignored here. Install a modern Python, then re-run this installer:"
+      echo
+      echo "    # if you have Homebrew:"
+      echo "    brew install python@3.12"
+      echo
+      echo "    # if you don't have Homebrew, install it first (one paste):"
+      echo '    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+      echo "    # then: brew install python@3.12"
+    else
+      echo "  Install Python 3.10+, then re-run this installer:"
+      echo
+      if [[ -f /etc/os-release ]] && grep -qiE 'ubuntu|debian' /etc/os-release 2>/dev/null; then
+        echo "    # Ubuntu / Debian (typical WSL):"
+        echo "    sudo apt update && sudo apt install -y python3.12 python3.12-venv"
+        echo "    # or, if your distro ships 3.10+ as python3:"
+        echo "    sudo apt install -y python3 python3-venv"
+      else
+        echo "    # use your distro package manager, or:"
+        echo "    https://www.python.org/downloads/"
+      fi
+      if [[ "$IS_WSL" -eq 1 ]]; then
+        echo
+        echo "  WSL setup guide: $WSL_DOC"
+      fi
+    fi
     echo
-    echo "    # if you have Homebrew:"
-    echo "    brew install python@3.12"
-    echo
-    echo "    # if you don't have Homebrew, install it first (one paste):"
-    echo '    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
-    echo "    # then: brew install python@3.12"
-    echo
-    echo "  After install, verify: command -v python3.12"
+    echo "  After install, verify: command -v python3.12 || command -v python3"
     exit 1
   fi
 fi
@@ -572,7 +632,7 @@ print("BRIDGE LIVE" if daemon_alive(ping_timeout=10) else "DAEMON NOT REACHABLE"
 
 If DAEMON NOT REACHABLE, the Mac side isn't set up: tell the user to run, once,
 in their Mac Terminal — \`curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | bash\`
-— then retry. (macOS or Linux; Windows not supported.)
+— then retry. (macOS, Linux, or WSL2 with systemd; native Windows not supported.)
 
 ## Step 2 — hand a task to Claude Code (main use)
 
@@ -602,7 +662,7 @@ cat > "$BRIDGE_ROOT/CLAUDE.md" <<CLAUDEMD
 # cowork-to-code-bridge — you are connected to the user's machine
 
 If you can read this file, the bridge folder ($BRIDGE_ROOT) is mounted into your
-sandbox. That means you can run things on the user's real machine (macOS/Linux)
+sandbox. That means you can run things on the user's real machine (macOS, Linux, or WSL2)
 through this bridge. Use it for anything the sandbox can't do: builds, tests,
 git, installs, system checks, or handing a task to Claude Code.
 
@@ -746,10 +806,18 @@ else
   c_green "  ✓ systemd unit written: $UNIT"
 
   # Enable lingering so the user service survives logout and starts at boot.
+  linger_ok=0
   if command -v loginctl >/dev/null 2>&1; then
-    loginctl enable-linger "$(id -un)" 2>/dev/null \
-      && c_green "  ✓ lingering enabled (survives logout/reboot)" \
-      || c_yellow "  ! could not enable lingering (service still runs while logged in)"
+    if loginctl enable-linger "$(id -un)" 2>/dev/null; then
+      c_green "  ✓ lingering enabled (survives logout/reboot)"
+      linger_ok=1
+    else
+      c_yellow "  ! could not enable lingering (service still runs while logged in)"
+    fi
+  fi
+  if [[ "$IS_WSL" -eq 1 ]] && [[ "$linger_ok" -eq 0 ]]; then
+    c_yellow "  ! On WSL2, lingering may not survive Windows sleep/reboot like on a server;"
+    c_yellow "    the daemon runs while your WSL session is up."
   fi
   systemctl --user daemon-reload 2>/dev/null || true
   systemctl --user enable --now cowork-to-code-bridge.service 2>/dev/null \
@@ -791,7 +859,16 @@ case ":$PATH:" in
   *":$USER_SCRIPTS_DIR:"*) path_has_dir=1 ;;
 esac
 
-ZSHRC="$HOME/.zshrc"
+# Prefer bashrc on Linux/WSL; zshrc on macOS or when default shell is zsh.
+if [[ "$OS" == "Linux" ]] || [[ "$IS_WSL" -eq 1 ]]; then
+  if [[ "${SHELL:-}" == *zsh* ]]; then
+    SHELL_RC="$HOME/.zshrc"
+  else
+    SHELL_RC="$HOME/.bashrc"
+  fi
+else
+  SHELL_RC="$HOME/.zshrc"
+fi
 PATH_LINE="export PATH=\"$USER_SCRIPTS_DIR:\$PATH\"  # cowork-to-code-bridge"
 
 if [[ "$path_has_dir" -eq 1 ]]; then
@@ -799,20 +876,20 @@ if [[ "$path_has_dir" -eq 1 ]]; then
 else
   c_yellow "  ! $USER_SCRIPTS_DIR is NOT on your PATH."
   echo "    The 'cowork-to-code-bridge-uninstall' and 'cowork-to-code-bridge-daemon'"
-  echo "    commands live there. To use them by bare name, add this to ~/.zshrc:"
+  echo "    commands live there. To use them by bare name, add this to $SHELL_RC:"
   echo
   echo "      $PATH_LINE"
   echo
 
   # Skip the prompt entirely when stdin isn't a TTY (e.g. curl | bash).
   if [[ -t 0 ]]; then
-    read -r -p "  Append this line to $ZSHRC now? [y/N] " ans
+    read -r -p "  Append this line to $SHELL_RC now? [y/N] " ans
     if [[ "$ans" =~ ^[Yy]$ ]]; then
-      if [[ -f "$ZSHRC" ]] && grep -Fq "$USER_SCRIPTS_DIR" "$ZSHRC"; then
-        c_yellow "    (already referenced in $ZSHRC — not appending duplicate)"
+      if [[ -f "$SHELL_RC" ]] && grep -Fq "$USER_SCRIPTS_DIR" "$SHELL_RC"; then
+        c_yellow "    (already referenced in $SHELL_RC — not appending duplicate)"
       else
-        printf '\n# Added by cowork-to-code-bridge installer\n%s\n' "$PATH_LINE" >> "$ZSHRC"
-        c_green "  ✓ appended to $ZSHRC — open a new terminal or run: source $ZSHRC"
+        printf '\n# Added by cowork-to-code-bridge installer\n%s\n' "$PATH_LINE" >> "$SHELL_RC"
+        c_green "  ✓ appended to $SHELL_RC — open a new terminal or run: source $SHELL_RC"
       fi
     else
       c_yellow "    skipped — add the export line manually when convenient."
@@ -842,6 +919,18 @@ $(c_green "  Connect to my machine via the cowork-to-code bridge at $BRIDGE_ROOT
 
 Claude will request access to that folder (approve it), read the instructions
 inside, and confirm "BRIDGE LIVE". After that, in THAT chat you can just say:
+DONE
+
+if [[ "$IS_WSL" -eq 1 ]]; then
+  cat <<DONE
+
+$(c_yellow "WSL2 note:") Use the WSL path above ($BRIDGE_ROOT), not a Windows
+  path like C:\\... or /mnt/c/... — Cowork must mount the folder where the
+  daemon runs (inside WSL). Guide: $WSL_DOC
+DONE
+fi
+
+cat <<DONE
 
   • "build me a small web app on my machine"
   • "run my tests and fix what's failing"
