@@ -38,6 +38,11 @@ Because Claude Code can run things on your Mac, a useful **side benefit** is tha
 ```bash
 curl -fsSL https://raw.githubusercontent.com/abhinaykrupa/cowork-to-code-bridge/main/install.sh | bash
 ```
+| `port_check.sh` | shows what is listening on a TCP port |
+| `docker_ps.sh` | lists running Docker containers |
+| `pkg_outdated.sh` | lists outdated packages (brew on macOS; apt/dnf/yum/pacman on Linux) |
+| `ping.sh` | confirms the bridge works |
+```
 
 Wait ~30 seconds. It installs a small background helper (auto-restarts, reboot-safe) and a Claude skill. When it finishes it prints a **connect line with your real path filled in** — copy that exact line, or use the template below.
 
