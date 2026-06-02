@@ -102,9 +102,40 @@ For simple, fast system queries, call a ready-made script directly:
 | "what's using CPU?" | `call_remote("scripts/mac_top.sh")` |
 | "network status?" | `call_remote("scripts/mac_network.sh")` |
 | "what's listening on port 3000?" | `call_remote("scripts/port_check.sh", args=["3000"])` |
+| "what Docker containers are running?" | `call_remote("scripts/docker_ps.sh")` |
+| "any outdated packages?" | `call_remote("scripts/pkg_outdated.sh")` |
 
 For a repeatable custom action, help the user save a small script in
 `~/.cowork-to-code-bridge/scripts/` on their Mac, then call it by name.
+
+## Step 4 — check the inbox (reverse direction: Claude Code → Cowork)
+
+Claude Code on the user's machine can leave requests for a Cowork session in
+`BRIDGE_ROOT/to_cowork/`. When the user says "check my inbox", "any requests
+from Claude Code?", or "did my machine leave me anything?", look for pending
+requests and act on them:
+
+```python
+import os, json, glob, time
+root = os.environ.get("BRIDGE_ROOT") or os.path.expanduser("~/.cowork-to-code-bridge")
+inbox = os.path.join(root, "to_cowork")
+replies = os.path.join(root, "cowork_results")
+os.makedirs(replies, exist_ok=True)
+pending = sorted(glob.glob(os.path.join(inbox, "*.json")))
+for p in pending:
+    req = json.load(open(p))
+    print(req["id"], "→", req["request"])
+    # ... do the requested work (it's a plain-English task from the machine) ...
+    # then write a reply and archive the request:
+    # json.dump({"id": req["id"], "reply": "<what you did>", "ts": time.time()},
+    #           open(os.path.join(replies, req["id"] + ".json"), "w"))
+    # os.remove(p)
+```
+
+**Honest limitation:** this only works while a Cowork session is open and the
+user asks to check — there's no way to wake Cowork from the machine. It's an
+async hand-off inbox, not a live channel. If the user wants a guaranteed live
+exchange, they should just ask here directly.
 
 ## Result shape & errors
 

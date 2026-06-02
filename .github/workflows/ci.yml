@@ -36,6 +36,10 @@ jobs:
           bash -n scripts/ci-wsl-smoke.sh
           bash -n tests/test_platform_detection.sh
           for s in examples/allowed_scripts/*.sh; do bash -n "$s"; done
+          bash -n tests/test_reverse_inbox.sh
+
+      - name: Reverse-inbox test
+        run: bash tests/test_reverse_inbox.sh
 
       - name: Platform detection tests
         if: runner.os == 'Linux'

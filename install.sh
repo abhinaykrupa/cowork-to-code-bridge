@@ -568,8 +568,117 @@ fi
 
 exit 0
 PC
-chmod +x "$BRIDGE_ROOT"/scripts/mac_*.sh "$BRIDGE_ROOT/scripts/port_check.sh"
-c_green "  ✓ scripts installed: ping, hello, run_claude, mac_health, mac_ram, mac_disk, mac_top, mac_network, port_check"
+cat > "$BRIDGE_ROOT/scripts/docker_ps.sh" <<'DPS'
+#!/usr/bin/env bash
+# docker_ps.sh — list running Docker containers (macOS or Linux).
+# Args: none.
+set -u
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Docker is not installed or not in PATH." >&2
+  exit 1
+fi
+
+if ! docker info >/dev/null 2>&1; then
+  echo "Docker is installed but the daemon is not running or not reachable." >&2
+  exit 1
+fi
+
+echo "=== RUNNING DOCKER CONTAINERS ==="
+docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
+
+exit 0
+DPS
+cat > "$BRIDGE_ROOT/scripts/pkg_outdated.sh" <<'POD'
+#!/usr/bin/env bash
+# pkg_outdated.sh — list outdated system packages (macOS or Linux).
+# Detects the package manager: brew on macOS; apt/dnf/yum/pacman on Linux.
+# Args: none.
+set -u
+
+echo "=== OUTDATED PACKAGES ==="
+found=0
+
+if command -v brew >/dev/null 2>&1; then
+  echo "--- Homebrew (brew outdated) ---"
+  brew outdated || true
+  found=1
+fi
+
+if [ "$found" -eq 0 ] && command -v apt >/dev/null 2>&1; then
+  echo "--- APT (apt list --upgradable) ---"
+  apt list --upgradable 2>/dev/null || true
+  found=1
+fi
+
+if [ "$found" -eq 0 ] && command -v dnf >/dev/null 2>&1; then
+  echo "--- DNF (dnf check-update) ---"
+  # dnf check-update exits 100 when updates exist; don't treat that as an error.
+  dnf check-update || true
+  found=1
+fi
+
+if [ "$found" -eq 0 ] && command -v yum >/dev/null 2>&1; then
+  echo "--- YUM (yum check-update) ---"
+  yum check-update || true
+  found=1
+fi
+
+if [ "$found" -eq 0 ] && command -v pacman >/dev/null 2>&1; then
+  echo "--- pacman (pacman -Qu) ---"
+  pacman -Qu || true
+  found=1
+fi
+
+if [ "$found" -eq 0 ]; then
+  echo "No supported package manager found (looked for brew, apt, dnf, yum, pacman)."
+fi
+
+exit 0
+POD
+# request_cowork.sh — REVERSE direction: hand a request from this machine to a
+# Cowork session (async inbox; Cowork picks it up next time one is open).
+cat > "$BRIDGE_ROOT/scripts/request_cowork.sh" <<'REQCW'
+#!/usr/bin/env bash
+# request_cowork.sh — drop a request for a Claude Cowork session (async inbox).
+# Cowork has no inbound address, so this queues to BRIDGE_ROOT/to_cowork/ and a
+# Cowork session picks it up next time one is open and checks its inbox.
+# Usage: request_cowork.sh "<request text>" [--wait SECONDS]
+set -euo pipefail
+BRIDGE_ROOT="${BRIDGE_ROOT:-$HOME/.cowork-to-code-bridge}"
+INBOX="$BRIDGE_ROOT/to_cowork"; REPLIES="$BRIDGE_ROOT/cowork_results"
+REQUEST="${1:?usage: request_cowork.sh \"<request>\" [--wait SECONDS]}"; shift || true
+WAIT=0
+if [[ "${1:-}" == "--wait" ]]; then
+  WAIT="${2:-300}"
+  [[ "$WAIT" =~ ^[0-9]+$ ]] || { echo "--wait expects seconds, got: $WAIT" >&2; exit 2; }
+  shift 2 || true
+fi
+mkdir -p "$INBOX" "$REPLIES"; chmod 700 "$INBOX" "$REPLIES" 2>/dev/null || true
+ID="$(date +%s)_$$_${RANDOM}"
+TOKEN=""
+[[ -f "$BRIDGE_ROOT/.env" ]] && TOKEN="$(grep '^BRIDGE_TOKEN=' "$BRIDGE_ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]')"
+TMP="$INBOX/.$ID.json.tmp"; OUT="$INBOX/$ID.json"
+python3 - "$ID" "$REQUEST" "$TOKEN" >"$TMP" <<'PY'
+import json,sys,time
+_id,req,tok=sys.argv[1],sys.argv[2],sys.argv[3]
+o={"id":_id,"request":req,"ts":time.time(),"from":"claude-code"}
+if tok:o["token"]=tok
+print(json.dumps(o))
+PY
+mv "$TMP" "$OUT"; echo "queued request for Cowork: $OUT"
+if [[ "$WAIT" -gt 0 ]]; then
+  RF="$REPLIES/$ID.json"; dl=$(( $(date +%s)+WAIT ))
+  while [[ "$(date +%s)" -lt "$dl" ]]; do [[ -f "$RF" ]] && { echo "=== reply ==="; cat "$RF"; exit 0; }; sleep 2; done
+  echo "no reply within ${WAIT}s (Cowork may not be open); request stays queued." >&2
+fi
+REQCW
+chmod +x "$BRIDGE_ROOT/scripts/request_cowork.sh"
+mkdir -p "$BRIDGE_ROOT/to_cowork" "$BRIDGE_ROOT/cowork_results"
+chmod 700 "$BRIDGE_ROOT/to_cowork" "$BRIDGE_ROOT/cowork_results" 2>/dev/null || true
+
+chmod +x "$BRIDGE_ROOT"/scripts/mac_*.sh "$BRIDGE_ROOT/scripts/port_check.sh" "$BRIDGE_ROOT/scripts/docker_ps.sh" "$BRIDGE_ROOT/scripts/pkg_outdated.sh"
+c_green "  ✓ scripts installed: ping, hello, run_claude, mac_health, mac_ram, mac_disk, mac_top, mac_network, port_check, docker_ps, pkg_outdated, request_cowork"
 
 # ─── 5b. Fetch the single-file Cowork client (one source of truth) ───────────
 # bridge_client.py is the EXACT file the Cowork sandbox imports. To avoid drift,
@@ -646,7 +755,7 @@ Always pass a unique \`idempotency_key\` — Claude Code tasks have side effects
 retry must not run twice.
 
 ## Step 3 — quick system checks (no agent)
-\`call_remote("scripts/mac_health.sh")\` · \`mac_ram.sh\` · \`mac_disk.sh\` · \`mac_top.sh\` · \`mac_network.sh\` · \`port_check.sh\`
+\`call_remote("scripts/mac_health.sh")\` · \`mac_ram.sh\` · \`mac_disk.sh\` · \`mac_top.sh\` · \`mac_network.sh\` · \`port_check.sh\` · \`docker_ps.sh\` · \`pkg_outdated.sh\`
 
 ## Results
 Dict with exit_code/stdout/stderr. Codes: -1 refused, -2 timeout, -3 internal,
@@ -689,7 +798,7 @@ Always pass a unique idempotency_key (tasks have side effects). For long builds,
 use call_remote_streaming(..., on_progress=cb).
 
 ## Quick checks (no agent)
-scripts/mac_health.sh · mac_ram.sh · mac_disk.sh · mac_top.sh · mac_network.sh · port_check.sh <port>
+scripts/mac_health.sh · mac_ram.sh · mac_disk.sh · mac_top.sh · mac_network.sh · port_check.sh <port> · docker_ps.sh · pkg_outdated.sh
 
 Results: dict with exit_code/stdout/stderr (-1 refused, -2 timeout, -3 internal,
 -4 crashed). Never claim success without exit_code 0 / BRIDGE LIVE.

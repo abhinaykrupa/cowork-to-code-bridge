@@ -62,6 +62,10 @@ RESULTS = BRIDGE_ROOT / "results"
 PROCESSED = BRIDGE_ROOT / "processed"
 INFLIGHT = BRIDGE_ROOT / "inflight"
 PROGRESS = BRIDGE_ROOT / "progress"  # live <id>.log files the client can tail
+# Reverse direction (#34): requests FROM this machine (Claude Code) TO a Cowork
+# session. Async inbox — Cowork picks these up when a session is next open.
+TO_COWORK = BRIDGE_ROOT / "to_cowork"        # requests Claude Code drops for Cowork
+COWORK_RESULTS = BRIDGE_ROOT / "cowork_results"  # replies Cowork writes back
 JOURNAL = BRIDGE_ROOT / "journal.log"
 POLL_SEC = float(os.environ.get("BRIDGE_POLL_SEC", "1.0"))
 MAX_TIMEOUT_SEC = int(os.environ.get("BRIDGE_MAX_TIMEOUT", "600"))
@@ -71,7 +75,9 @@ JOURNAL_ROTATE_BYTES = 50 * 1024 * 1024  # rotate at 50 MB (keep one .old)
 MAX_CMD_BYTES = 1 * 1024 * 1024  # reject command files larger than 1 MB (DoS guard)
 
 # Allow only relative paths inside scripts/, ending in .sh or .py.
-SAFE_NAME = re.compile(r"^scripts/[A-Za-z0-9_/.-]+\.(sh|py)$")
+# Use fullmatch (not match) so the pattern must cover the ENTIRE string —
+# re.match only anchors the start, fullmatch anchors both ends.
+SAFE_NAME = re.compile(r"scripts/[A-Za-z0-9_/.-]+\.(sh|py)")
 
 
 def load_env() -> dict[str, str]:
@@ -365,7 +371,7 @@ def run_one(cmd_path: Path, token_required: str | None,
 
     # ─── validate script path ─────────────────────────────────────────────────
     script = cmd.get("script", "")
-    if not SAFE_NAME.match(script):
+    if not SAFE_NAME.fullmatch(script):
         write_result(cmd_id, {"exit_code": -1, "error": f"script path not allowed: {script!r}"})
         log(f"  ✗ {cmd_id}: bad script path {script!r}")
         cmd_path.rename(PROCESSED / cmd_path.name)
@@ -409,7 +415,19 @@ def run_one(cmd_path: Path, token_required: str | None,
 
     log(f"  → {cmd_id}: {script} {args}")
     env = load_env()
-    env.update({str(k): str(v) for k, v in extra_env.items()})
+    # Security: daemon (owner) env vars take priority over caller-supplied env.
+    # This prevents a caller with the bridge token from overriding security-critical
+    # vars like CLAUDE_FLAGS that the owner set in launchd/systemd to restrict
+    # what Claude Code can do. Caller can only SET vars not already in daemon env.
+    for k, v in extra_env.items():
+        k = str(k)
+        if k not in env:          # owner var wins; caller can only add new ones
+            env[k] = str(v)
+        elif k.upper() in ("CLAUDE_FLAGS", "BRIDGE_TOKEN", "BRIDGE_ROOT",
+                           "BRIDGE_ALLOW_UNAUTH", "BRIDGE_MAX_TIMEOUT"):
+            log(f"  ! blocked caller attempt to override protected env var: {k}")
+        else:
+            env[k] = str(v)       # non-security vars: caller wins (e.g. PYTHONPATH)
 
     # ─── in-flight marker + journal: started ──────────────────────────────────
     # Marker is written BEFORE subprocess.run. If we crash between this point
@@ -445,13 +463,15 @@ def run_one(cmd_path: Path, token_required: str | None,
 
 
 def main() -> int:
-    for d in (BRIDGE_ROOT, QUEUE, RESULTS, PROCESSED, INFLIGHT, PROGRESS, SCRIPTS_DIR):
+    for d in (BRIDGE_ROOT, QUEUE, RESULTS, PROCESSED, INFLIGHT, PROGRESS,
+              TO_COWORK, COWORK_RESULTS, SCRIPTS_DIR):
         d.mkdir(parents=True, exist_ok=True)
 
     # Harden directory perms: only the owner should be able to read the token,
     # write into the queue, or drop scripts. World/group-writable here would let
-    # any local user inject commands or scripts. Tighten + warn if loose.
-    for d in (BRIDGE_ROOT, QUEUE, SCRIPTS_DIR):
+    # any local user inject commands or scripts. to_cowork/ + cowork_results/ are
+    # included because their request/reply files can carry the bridge token.
+    for d in (BRIDGE_ROOT, QUEUE, SCRIPTS_DIR, TO_COWORK, COWORK_RESULTS):
         try:
             mode = d.stat().st_mode & 0o777
             if mode & 0o077:  # any group/other bits set

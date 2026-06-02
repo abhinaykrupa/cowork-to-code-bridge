@@ -7,6 +7,13 @@ All notable changes to this project. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Reverse direction (Claude Code → Cowork), v1 async inbox (#34).**
+  `request_cowork.sh` lets Claude Code on the machine drop a request into
+  `BRIDGE_ROOT/to_cowork/`; a Cowork session picks it up next time one is open
+  and checks its inbox (skill Step 4), optionally writing a reply to
+  `cowork_results/`. Optional `--wait SECONDS` polls for the reply. Honest
+  limitation documented: this is an async hand-off, not a live channel —
+  Cowork can't be woken from the machine (no inbound address to the sandbox).
 - **WSL2 (Windows) install path.** Same Linux/systemd installer inside WSL2;
   `install.sh` detects WSL, prints systemd setup hints when needed, redirects
   Git Bash/PowerShell users to WSL, and documents paths/lingering. See

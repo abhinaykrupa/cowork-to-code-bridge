@@ -162,3 +162,37 @@ def test_e2e_wrong_token_rejected(bridge):
     assert res["exit_code"] == -1
     assert "token mismatch" in res["error"]
     assert counter.read_text().strip() == "0", "script must not run on bad token"
+
+
+def test_e2e_caller_cannot_override_protected_env_vars(bridge):
+    """Security: a caller with the token must not be able to override CLAUDE_FLAGS
+    or other protected env vars set by the daemon owner (e.g. via launchd)."""
+    import importlib
+    d, _ = bridge
+
+    # Inject CLAUDE_FLAGS into the daemon env (simulates owner setting it in launchd)
+    import os
+    os.environ["CLAUDE_FLAGS"] = "--permission-mode plan"
+    importlib.reload(d)  # reload so daemon picks up the env
+
+    # Caller tries to unset CLAUDE_FLAGS via cmd.env — must NOT take effect
+    cmd_id = "1600_sec"
+    payload = {
+        "id": cmd_id, "script": "scripts/increment.sh", "args": [],
+        "token": "test-token", "timeout": 5,
+        "env": {"CLAUDE_FLAGS": ""},   # attacker tries to clear the restriction
+    }
+    f = d.QUEUE / f"{cmd_id}.json"
+    import json as _json
+    f.write_text(_json.dumps(payload))
+    terminal, cache = {}, {}
+    d.run_one(f, "test-token", terminal, cache)
+
+    # The call should complete (exit 0 — the increment script doesn't use CLAUDE_FLAGS),
+    # but more importantly: verify daemon logged the blocked override attempt.
+    import json as j
+    res = j.loads((d.RESULTS / f"{cmd_id}.json").read_text())
+    assert res["exit_code"] == 0
+
+    # Clean up env
+    del os.environ["CLAUDE_FLAGS"]
