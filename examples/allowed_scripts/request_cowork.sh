@@ -33,6 +33,11 @@ shift || true
 WAIT=0
 if [[ "${1:-}" == "--wait" ]]; then
   WAIT="${2:-300}"
+  if [[ ! "$WAIT" =~ ^[0-9]+$ ]]; then
+    echo "request_cowork.sh: --wait expects a number of seconds, got: ${WAIT}" >&2
+    exit 2
+  fi
+  shift 2 || true
 fi
 
 mkdir -p "$INBOX" "$REPLIES"
@@ -42,7 +47,9 @@ chmod 700 "$INBOX" "$REPLIES" 2>/dev/null || true
 ID="$(date +%s)_$$_${RANDOM}"
 TOKEN=""
 if [[ -f "$BRIDGE_ROOT/.env" ]]; then
-  TOKEN="$(grep '^BRIDGE_TOKEN=' "$BRIDGE_ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'"'"' [:space:]')"
+  # Strip surrounding quotes then whitespace — same robust pipeline as install.sh.
+  TOKEN="$(grep '^BRIDGE_TOKEN=' "$BRIDGE_ROOT/.env" 2>/dev/null | head -1 \
+    | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]')"
 fi
 
 # Atomic write: .tmp then mv, so a polling Cowork session never reads a partial file.

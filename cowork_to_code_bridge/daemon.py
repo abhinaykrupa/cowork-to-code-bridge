@@ -469,8 +469,9 @@ def main() -> int:
 
     # Harden directory perms: only the owner should be able to read the token,
     # write into the queue, or drop scripts. World/group-writable here would let
-    # any local user inject commands or scripts. Tighten + warn if loose.
-    for d in (BRIDGE_ROOT, QUEUE, SCRIPTS_DIR):
+    # any local user inject commands or scripts. to_cowork/ + cowork_results/ are
+    # included because their request/reply files can carry the bridge token.
+    for d in (BRIDGE_ROOT, QUEUE, SCRIPTS_DIR, TO_COWORK, COWORK_RESULTS):
         try:
             mode = d.stat().st_mode & 0o777
             if mode & 0o077:  # any group/other bits set

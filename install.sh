@@ -588,10 +588,16 @@ set -euo pipefail
 BRIDGE_ROOT="${BRIDGE_ROOT:-$HOME/.cowork-to-code-bridge}"
 INBOX="$BRIDGE_ROOT/to_cowork"; REPLIES="$BRIDGE_ROOT/cowork_results"
 REQUEST="${1:?usage: request_cowork.sh \"<request>\" [--wait SECONDS]}"; shift || true
-WAIT=0; [[ "${1:-}" == "--wait" ]] && WAIT="${2:-300}"
+WAIT=0
+if [[ "${1:-}" == "--wait" ]]; then
+  WAIT="${2:-300}"
+  [[ "$WAIT" =~ ^[0-9]+$ ]] || { echo "--wait expects seconds, got: $WAIT" >&2; exit 2; }
+  shift 2 || true
+fi
 mkdir -p "$INBOX" "$REPLIES"; chmod 700 "$INBOX" "$REPLIES" 2>/dev/null || true
 ID="$(date +%s)_$$_${RANDOM}"
-TOKEN=""; [[ -f "$BRIDGE_ROOT/.env" ]] && TOKEN="$(grep '^BRIDGE_TOKEN=' "$BRIDGE_ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'"'"' [:space:]')"
+TOKEN=""
+[[ -f "$BRIDGE_ROOT/.env" ]] && TOKEN="$(grep '^BRIDGE_TOKEN=' "$BRIDGE_ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]')"
 TMP="$INBOX/.$ID.json.tmp"; OUT="$INBOX/$ID.json"
 python3 - "$ID" "$REQUEST" "$TOKEN" >"$TMP" <<'PY'
 import json,sys,time
