@@ -33,6 +33,10 @@ jobs:
           bash -n install.sh
           bash -n daemon/uninstall.sh
           for s in examples/allowed_scripts/*.sh; do bash -n "$s"; done
+          bash -n tests/test_reverse_inbox.sh
+
+      - name: Reverse-inbox test
+        run: bash tests/test_reverse_inbox.sh
 
       - name: Tests
         run: pytest -q

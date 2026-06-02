@@ -576,8 +576,43 @@ fi
 
 exit 0
 POD
+# request_cowork.sh — REVERSE direction: hand a request from this machine to a
+# Cowork session (async inbox; Cowork picks it up next time one is open).
+cat > "$BRIDGE_ROOT/scripts/request_cowork.sh" <<'REQCW'
+#!/usr/bin/env bash
+# request_cowork.sh — drop a request for a Claude Cowork session (async inbox).
+# Cowork has no inbound address, so this queues to BRIDGE_ROOT/to_cowork/ and a
+# Cowork session picks it up next time one is open and checks its inbox.
+# Usage: request_cowork.sh "<request text>" [--wait SECONDS]
+set -euo pipefail
+BRIDGE_ROOT="${BRIDGE_ROOT:-$HOME/.cowork-to-code-bridge}"
+INBOX="$BRIDGE_ROOT/to_cowork"; REPLIES="$BRIDGE_ROOT/cowork_results"
+REQUEST="${1:?usage: request_cowork.sh \"<request>\" [--wait SECONDS]}"; shift || true
+WAIT=0; [[ "${1:-}" == "--wait" ]] && WAIT="${2:-300}"
+mkdir -p "$INBOX" "$REPLIES"; chmod 700 "$INBOX" "$REPLIES" 2>/dev/null || true
+ID="$(date +%s)_$$_${RANDOM}"
+TOKEN=""; [[ -f "$BRIDGE_ROOT/.env" ]] && TOKEN="$(grep '^BRIDGE_TOKEN=' "$BRIDGE_ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'"'"' [:space:]')"
+TMP="$INBOX/.$ID.json.tmp"; OUT="$INBOX/$ID.json"
+python3 - "$ID" "$REQUEST" "$TOKEN" >"$TMP" <<'PY'
+import json,sys,time
+_id,req,tok=sys.argv[1],sys.argv[2],sys.argv[3]
+o={"id":_id,"request":req,"ts":time.time(),"from":"claude-code"}
+if tok:o["token"]=tok
+print(json.dumps(o))
+PY
+mv "$TMP" "$OUT"; echo "queued request for Cowork: $OUT"
+if [[ "$WAIT" -gt 0 ]]; then
+  RF="$REPLIES/$ID.json"; dl=$(( $(date +%s)+WAIT ))
+  while [[ "$(date +%s)" -lt "$dl" ]]; do [[ -f "$RF" ]] && { echo "=== reply ==="; cat "$RF"; exit 0; }; sleep 2; done
+  echo "no reply within ${WAIT}s (Cowork may not be open); request stays queued." >&2
+fi
+REQCW
+chmod +x "$BRIDGE_ROOT/scripts/request_cowork.sh"
+mkdir -p "$BRIDGE_ROOT/to_cowork" "$BRIDGE_ROOT/cowork_results"
+chmod 700 "$BRIDGE_ROOT/to_cowork" "$BRIDGE_ROOT/cowork_results" 2>/dev/null || true
+
 chmod +x "$BRIDGE_ROOT"/scripts/mac_*.sh "$BRIDGE_ROOT/scripts/port_check.sh" "$BRIDGE_ROOT/scripts/docker_ps.sh" "$BRIDGE_ROOT/scripts/pkg_outdated.sh"
-c_green "  ✓ scripts installed: ping, hello, run_claude, mac_health, mac_ram, mac_disk, mac_top, mac_network, port_check, docker_ps, pkg_outdated"
+c_green "  ✓ scripts installed: ping, hello, run_claude, mac_health, mac_ram, mac_disk, mac_top, mac_network, port_check, docker_ps, pkg_outdated, request_cowork"
 
 # ─── 5b. Fetch the single-file Cowork client (one source of truth) ───────────
 # bridge_client.py is the EXACT file the Cowork sandbox imports. To avoid drift,
