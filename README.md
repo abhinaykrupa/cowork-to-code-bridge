@@ -148,6 +148,9 @@ You can [uninstall it completely with one command](#uninstall) at any time.
 
 **The main thing: hand a task to Claude Code on your Mac.** The install ships a script called `run_claude.sh` that does exactly this. From Cowork you say something like *"have Claude Code on my Mac run the tests and fix what breaks"* and a real Claude Code agent on your machine carries it out, then reports back. That's the headline feature — Cowork delegating to a full local agent.
 
+For copy-paste examples that map Cowork requests to the bundled scripts, see
+**[Cowork Recipes](docs/RECIPES.md)**.
+
 The install gives you these to start:
 
 - `run_claude.sh` — **hands a task to Claude Code on your Mac** (the main event)
