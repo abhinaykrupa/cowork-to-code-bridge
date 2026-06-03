@@ -8,20 +8,20 @@ if [[ "$(uname -s)" != "Linux" ]]; then
 fi
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-# shellcheck source=scripts/lib/daemon_service.sh
-source "$ROOT/scripts/lib/daemon_service.sh"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "PASS: $*"; }
 
 TMP="$(mktemp -d)"
-trap 'bridge_stop_daemon_manual 2>/dev/null || true; rm -rf "$TMP"' EXIT
-
 BRIDGE_ROOT="$TMP/bridge"
 DAEMON_LOG="$BRIDGE_ROOT/daemon.log"
 DAEMON_ERR="$BRIDGE_ROOT/daemon.err"
 USER_SCRIPTS_DIR=""
 mkdir -p "$BRIDGE_ROOT"
+
+# shellcheck source=scripts/lib/daemon_service.sh
+source "$ROOT/scripts/lib/daemon_service.sh"
+trap 'bridge_stop_daemon_manual 2>/dev/null || true; rm -rf "$TMP"' EXIT
 
 if python3 -c "import cowork_to_code_bridge.daemon" 2>/dev/null; then
   DAEMON_ARGS=(python3 -m cowork_to_code_bridge.daemon)

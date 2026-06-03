@@ -2,7 +2,7 @@
 # Source after setting BRIDGE_ROOT, DAEMON_LOG, DAEMON_ERR, USER_SCRIPTS_DIR, DAEMON_ARGS[].
 
 BRIDGE_CRON_MARKER="# cowork-to-code-bridge @reboot"
-BRIDGE_PID_FILE="${BRIDGE_PID_FILE:-$BRIDGE_ROOT/daemon.pid}"
+BRIDGE_PID_FILE="${BRIDGE_PID_FILE:-${BRIDGE_ROOT:-}/daemon.pid}"
 
 bridge_stop_daemon_manual() {
   local pidfile="$BRIDGE_PID_FILE"
