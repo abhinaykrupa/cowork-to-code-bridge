@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regression tests for WSL/platform detection (run on ubuntu-latest in CI).
+# Regression tests for WSL/platform/service-manager detection (ubuntu-latest in CI).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -51,10 +51,23 @@ if mock_proc "Linux version 6.8.0-31-generic #1 SMP PREEMPT"; then
   restore_proc
 fi
 
-# WSL_DISTRO_NAME env
 export WSL_DISTRO_NAME=Ubuntu
 is_wsl || fail "expected WSL from WSL_DISTRO_NAME"
 unset WSL_DISTRO_NAME
 pass "detects WSL_DISTRO_NAME"
+
+export BRIDGE_FORCE_SERVICE_MGR=manual
+[[ "$(linux_service_mgr)" == "manual" ]] || fail "BRIDGE_FORCE_SERVICE_MGR=manual"
+unset BRIDGE_FORCE_SERVICE_MGR
+pass "BRIDGE_FORCE_SERVICE_MGR override"
+
+if has_systemd_user_bus; then
+  [[ "$(linux_service_mgr)" == "systemd" ]] || fail "expected systemd on bus-available host"
+  pass "linux_service_mgr systemd when user bus works"
+else
+  mgr="$(linux_service_mgr)"
+  [[ "$mgr" == "manual" || "$mgr" == "wsl_need_systemd" ]] || fail "unexpected mgr: $mgr"
+  pass "linux_service_mgr fallback without user bus ($mgr)"
+fi
 
 echo "All platform detection checks passed."

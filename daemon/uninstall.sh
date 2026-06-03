@@ -59,8 +59,32 @@ confirm() {
   [[ "$response" =~ ^[Yy]$ ]]
 }
 
+_UNINSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || true
+_REPO_ROOT="$(cd "$_UNINSTALL_DIR/.." 2>/dev/null && pwd)" || true
+if [[ -f "$_REPO_ROOT/scripts/lib/daemon_service.sh" ]]; then
+  BRIDGE_ROOT="${BRIDGE_ROOT:-$HOME/.cowork-to-code-bridge}"
+  # shellcheck source=scripts/lib/daemon_service.sh
+  source "$_REPO_ROOT/scripts/lib/daemon_service.sh"
+elif [[ -f "$BRIDGE_ROOT/lib/daemon_service.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "$BRIDGE_ROOT/lib/daemon_service.sh"
+fi
+
 if [[ "$(uname -s)" == "Linux" ]]; then
-  # Linux: tear down the systemd --user service.
+  # Linux: tear down manual daemon, then systemd --user if present.
+  if declare -F bridge_stop_daemon_manual >/dev/null 2>&1; then
+    echo "→ stopping manual daemon (if running)"
+    bridge_stop_daemon_manual || true
+    bridge_remove_cron_reboot 2>/dev/null || true
+  elif [[ -f "$BRIDGE_ROOT/daemon.pid" ]]; then
+    pid="$(cat "$BRIDGE_ROOT/daemon.pid" 2>/dev/null || true)"
+    [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
+    rm -f "$BRIDGE_ROOT/daemon.pid"
+  fi
+  if [[ -f "$BRIDGE_ROOT/start-daemon.sh" ]]; then
+    echo "→ removing $BRIDGE_ROOT/start-daemon.sh"
+    rm -f "$BRIDGE_ROOT/start-daemon.sh"
+  fi
   if command -v systemctl >/dev/null 2>&1; then
     echo "→ stopping + disabling systemd --user service"
     systemctl --user disable --now cowork-to-code-bridge.service 2>/dev/null || true

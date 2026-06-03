@@ -13,7 +13,7 @@
   <img src="./docs/demo.svg" alt="Cowork hands a 'build me a Flask app' task to Claude Code on your machine; it scaffolds, installs, runs, and verifies it — then reports back." width="100%">
 </p>
 
-> 🖥️ **macOS, Linux, and WSL2.** Works on your Mac (launchd), a Linux box/server (systemd), or **Windows via WSL2** (same systemd path). Native Windows isn't supported yet — see [docs/WSL.md](docs/WSL.md).
+> 🖥️ **macOS, Linux, and WSL2.** Works on your Mac (launchd), a Linux box/server (systemd, or a [manual path](docs/LINUX-NO-SYSTEMD.md) for containers/minimal distros), or **Windows via WSL2** (systemd in Ubuntu). Native Windows isn't supported yet — see [docs/WSL.md](docs/WSL.md).
 
 [Claude Cowork](https://claude.ai/cowork) (and Claude in your browser) is great at planning and editing, but it runs in a sealed cloud sandbox — it can't reach your actual machine. **Claude Code**, running on your computer, *can*: it has your shell, your repos, your tools, and full agent abilities.
 
@@ -64,7 +64,7 @@ On Windows, install **inside WSL2** (Ubuntu), not PowerShell or Git Bash. You ne
 <details>
 <summary>What the installer puts where (for the curious / developers)</summary>
 
-- **Daemon** → runs from `~/.cowork-to-code-bridge/`, managed by launchd (macOS) or systemd --user (Linux); auto-start, reboot-safe.
+- **Daemon** → runs from `~/.cowork-to-code-bridge/`, managed by launchd (macOS), systemd --user (Linux), or a [manual path](docs/LINUX-NO-SYSTEMD.md) when systemd is unavailable.
 - **Global skill** → `~/.claude/skills/cowork-to-code-bridge/` (SKILL.md + `bridge_client.py` + a `bridge_env.json` pointing at `BRIDGE_ROOT`).
 - **Whitelisted scripts** → `~/.cowork-to-code-bridge/scripts/` (`run_claude.sh`, `mac_health.sh`, …).
 - **`CLAUDE.md`** → written into `~/.cowork-to-code-bridge/` so the bridge self-documents once a Cowork session mounts the folder.
@@ -106,7 +106,7 @@ Cowork can't reach your machine directly (it's sandboxed). So the bridge uses a 
 |---|---|---|
 | **Skill** | Every Cowork session (`~/.claude/skills/`) | Auto-loaded; turns your plain-English request into a task and reads back the result. No install inside Cowork. |
 | **Shared folder** | `~/.cowork-to-code-bridge/` | The hand-off point: `queue/` (tasks in), `results/` (answers out), `progress/` (live output for long jobs). |
-| **Daemon** | Your machine, run by `launchd` (macOS) or `systemd --user` (Linux) | Watches `queue/`, runs only whitelisted scripts, writes results. Auto-restarts on reboot. |
+| **Daemon** | Your machine, run by `launchd` (macOS), `systemd --user` (Linux), or manual start (containers) | Watches `queue/`, runs only whitelisted scripts, writes results. Auto-restarts on reboot when the service manager supports it. |
 | **`run_claude.sh`** | Your machine | Hands the task to a real **Claude Code** agent — that's what builds the actual product. |
 
 **Why it's safe:** no network listener (nothing can connect in), a secret token gates every request, and the daemon only runs scripts you've approved. **Why it survives crashes:** every task is journaled and marked in-flight; a reboot mid-task is detected and never silently re-run (idempotency keys make retries safe).
@@ -361,7 +361,7 @@ The realistic threats this *can't* defend against:
 ## FAQ
 
 **Q: Does this work on Linux or Windows?**
-**macOS** (launchd), **Linux** (systemd --user), and **WSL2 on Windows** (systemd in your Ubuntu distro) are supported. **Native Windows** (PowerShell, Task Scheduler) is not — use WSL2; see [docs/WSL.md](docs/WSL.md).
+**macOS** (launchd), **Linux** (`systemd --user` or the [no-systemd installer path](docs/LINUX-NO-SYSTEMD.md)), and **WSL2 on Windows** (systemd in your Ubuntu distro) are supported. **Native Windows** (PowerShell, Task Scheduler) is not — use WSL2; see [docs/WSL.md](docs/WSL.md).
 
 **Q: Does it cost anything?**
 No. It's free and open source (MIT).

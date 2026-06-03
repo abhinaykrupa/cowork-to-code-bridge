@@ -37,24 +37,42 @@ c_red()    { printf "\033[0;31m%s\033[0m\n" "$1"; }
 step()     { printf "\n\033[1;36m==> %s\033[0m\n" "$1"; }
 
 # ─── 0. Preflight: detect OS / service manager ───────────────────────────────
-# macOS uses launchd; Linux and WSL2 use systemd --user. We branch the
-# service-manager steps on $OS; everything else (Python, bridge dir, token,
-# scripts, the global skill) is shared.
+# macOS uses launchd; Linux uses systemd --user when available, else manual
+# (setsid/nohup + optional @reboot cron). WSL2 uses systemd when enabled.
+NO_SYSTEMD_DOC="https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/docs/LINUX-NO-SYSTEMD.md"
 WSL_DOC="https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/docs/WSL.md"
-
-# Canonical copy also lives in scripts/lib/platform.sh (for tests).
-is_wsl() {
-  [[ -n "${WSL_DISTRO_NAME:-}" ]] || grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null
-}
 _INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || true
 if [[ -n "$_INSTALL_DIR" && -f "$_INSTALL_DIR/scripts/lib/platform.sh" ]]; then
   # shellcheck source=scripts/lib/platform.sh
   source "$_INSTALL_DIR/scripts/lib/platform.sh"
 fi
+if [[ -n "$_INSTALL_DIR" && -f "$_INSTALL_DIR/scripts/lib/daemon_service.sh" ]]; then
+  # shellcheck source=scripts/lib/daemon_service.sh
+  source "$_INSTALL_DIR/scripts/lib/daemon_service.sh"
+fi
+
+# Inline fallbacks when install.sh is piped (curl | bash) and lib/ is unavailable.
+if ! declare -F linux_service_mgr >/dev/null 2>&1; then
+  is_wsl() {
+    [[ -n "${WSL_DISTRO_NAME:-}" ]] || grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null
+  }
+  has_systemctl() { command -v systemctl >/dev/null 2>&1; }
+  has_systemd_user_bus() {
+    has_systemctl && systemctl --user ping >/dev/null 2>&1
+  }
+  linux_service_mgr() {
+    local forced="${BRIDGE_FORCE_SERVICE_MGR:-}"
+    if [[ -n "$forced" ]]; then echo "$forced"; return 0; fi
+    if has_systemd_user_bus; then echo "systemd"; return 0; fi
+    if is_wsl; then echo "wsl_need_systemd"; return 0; fi
+    echo "manual"
+  }
+fi
 
 OS="$(uname -s)"
 IS_WSL=0
-if is_wsl; then IS_WSL=1; fi
+if declare -F is_wsl >/dev/null 2>&1 && is_wsl; then IS_WSL=1; fi
+PLATFORM_NOTE=""
 
 case "$OS" in
   Darwin)
@@ -62,33 +80,39 @@ case "$OS" in
     PLATFORM_NOTE="macOS (launchd)"
     ;;
   Linux)
-    if command -v systemctl >/dev/null 2>&1; then
-      SERVICE_MGR="systemd"
-      if [[ "$IS_WSL" -eq 1 ]]; then
-        PLATFORM_NOTE="Linux (WSL2, systemd --user)"
-      else
-        PLATFORM_NOTE="Linux (systemd --user)"
-      fi
-    elif [[ "$IS_WSL" -eq 1 ]]; then
-      c_red "✗ WSL2 without systemd is not supported."
-      echo "  Enable systemd in WSL, then re-run this installer:"
-      echo
-      echo "    1. In WSL: sudo tee /etc/wsl.conf >/dev/null <<'EOF'"
-      echo "       [boot]"
-      echo "       systemd=true"
-      echo "       EOF"
-      echo "    2. In Windows PowerShell: wsl --shutdown"
-      echo "    3. Re-open your Ubuntu/WSL app and run this installer again."
-      echo
-      echo "  Full guide: $WSL_DOC"
-      exit 1
-    else
-      c_red "✗ Linux without systemd is not yet supported."
-      echo "  This installer manages the daemon via 'systemctl --user', which"
-      echo "  wasn't found. (Containers/minimal distros may lack it.)"
-      echo "  Open an issue if you need a non-systemd Linux path."
-      exit 1
-    fi
+    _linux_mgr="$(linux_service_mgr)"
+    case "$_linux_mgr" in
+      systemd)
+        SERVICE_MGR="systemd"
+        if [[ "$IS_WSL" -eq 1 ]]; then
+          PLATFORM_NOTE="Linux (WSL2, systemd --user)"
+        else
+          PLATFORM_NOTE="Linux (systemd --user)"
+        fi
+        ;;
+      manual)
+        SERVICE_MGR="manual"
+        PLATFORM_NOTE="Linux (manual daemon, no systemd)"
+        ;;
+      wsl_need_systemd)
+        c_red "✗ WSL2 without systemd is not supported."
+        echo "  Enable systemd in WSL, then re-run this installer:"
+        echo
+        echo "    1. In WSL: sudo tee /etc/wsl.conf >/dev/null <<'EOF'"
+        echo "       [boot]"
+        echo "       systemd=true"
+        echo "       EOF"
+        echo "    2. In Windows PowerShell: wsl --shutdown"
+        echo "    3. Re-open your Ubuntu/WSL app and run this installer again."
+        echo
+        echo "  Full guide: $WSL_DOC"
+        exit 1
+        ;;
+      *)
+        c_red "✗ Unsupported Linux service manager: $_linux_mgr"
+        exit 1
+        ;;
+    esac
     ;;
   MINGW*|MSYS*|CYGWIN*)
     c_red "✗ Native Windows shell is not supported."
@@ -100,7 +124,7 @@ case "$OS" in
     ;;
   *)
     c_red "✗ Unsupported OS: $OS"
-    echo "  Supported: macOS (launchd), Linux (systemd), and WSL2 with systemd."
+    echo "  Supported: macOS (launchd), Linux (systemd or manual), and WSL2 with systemd."
     echo "  Native Windows is not supported — use WSL2. Guide: $WSL_DOC"
     exit 1
     ;;
@@ -741,7 +765,7 @@ print("BRIDGE LIVE" if daemon_alive(ping_timeout=10) else "DAEMON NOT REACHABLE"
 
 If DAEMON NOT REACHABLE, the Mac side isn't set up: tell the user to run, once,
 in their Mac Terminal — \`curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | bash\`
-— then retry. (macOS, Linux, or WSL2 with systemd; native Windows not supported.)
+— then retry. (macOS, Linux with systemd or manual path, or WSL2 with systemd; native Windows not supported.)
 
 ## Step 2 — hand a task to Claude Code (main use)
 
@@ -885,7 +909,7 @@ if [[ "$SERVICE_MGR" == "launchd" ]]; then
     exit 1
   fi
 
-else
+elif [[ "$SERVICE_MGR" == "systemd" ]]; then
   # ── Linux: systemd --user unit ─────────────────────────────────────────────
   UNIT_DIR="$HOME/.config/systemd/user"
   UNIT="$UNIT_DIR/cowork-to-code-bridge.service"
@@ -939,6 +963,68 @@ else
   else
     c_red "  ✗ systemd service is not active"
     systemctl --user status cowork-to-code-bridge.service --no-pager 2>/dev/null | tail -15 || true
+    tail -20 "$DAEMON_ERR" 2>/dev/null || true
+    exit 1
+  fi
+
+else
+  # ── Linux: manual daemon (no systemd user bus) ───────────────────────────
+  mkdir -p "$BRIDGE_ROOT/lib"
+  if [[ -n "$_INSTALL_DIR" && -f "$_INSTALL_DIR/scripts/lib/daemon_service.sh" ]]; then
+    cp "$_INSTALL_DIR/scripts/lib/daemon_service.sh" "$BRIDGE_ROOT/lib/daemon_service.sh"
+  elif ! curl -fsSL "https://raw.githubusercontent.com/$REPO/main/scripts/lib/daemon_service.sh" \
+      -o "$BRIDGE_ROOT/lib/daemon_service.sh" 2>/dev/null; then
+    c_red "  ✗ could not install daemon_service.sh (offline?)"
+    exit 1
+  fi
+  if ! declare -F bridge_start_daemon_manual >/dev/null 2>&1; then
+    # shellcheck source=/dev/null
+    source "$BRIDGE_ROOT/lib/daemon_service.sh"
+  fi
+
+  START_SCRIPT="$BRIDGE_ROOT/start-daemon.sh"
+  {
+    echo '#!/usr/bin/env bash'
+    echo '# start-daemon.sh — start the bridge daemon (non-systemd Linux).'
+    echo 'set -euo pipefail'
+    echo "BRIDGE_ROOT=\"$BRIDGE_ROOT\""
+    echo "export BRIDGE_ROOT"
+    echo "DAEMON_LOG=\"$DAEMON_LOG\""
+    echo "DAEMON_ERR=\"$DAEMON_ERR\""
+    echo "USER_SCRIPTS_DIR=\"$USER_SCRIPTS_DIR\""
+    echo 'export PATH="'"$USER_SCRIPTS_DIR"':$PATH:/usr/local/bin:/usr/bin:/bin"'
+    echo 'DAEMON_ARGS=('
+    for arg in "${DAEMON_ARGS[@]}"; do
+      printf '  %q\n' "$arg"
+    done
+    echo ')'
+    echo 'source "$BRIDGE_ROOT/lib/daemon_service.sh"'
+    echo 'bridge_start_daemon_manual'
+  } > "$START_SCRIPT"
+  chmod +x "$START_SCRIPT"
+  c_green "  ✓ wrote $START_SCRIPT"
+
+  if bridge_start_daemon_manual; then
+    c_green "  ✓ daemon started (setsid/nohup, pid in $BRIDGE_ROOT/daemon.pid)"
+  else
+    c_red "  ✗ failed to start daemon manually"
+    tail -20 "$DAEMON_ERR" 2>/dev/null || true
+    exit 1
+  fi
+
+  if bridge_install_cron_reboot "$START_SCRIPT"; then
+    c_green "  ✓ @reboot cron entry installed (survives reboot when crond runs)"
+  else
+    c_yellow "  ! no @reboot cron (crontab missing or BRIDGE_SKIP_CRON=1)"
+    c_yellow "    After reboot, run: $START_SCRIPT"
+    c_yellow "    Guide: $NO_SYSTEMD_DOC"
+  fi
+
+  step "Verifying daemon"
+  if bridge_manual_daemon_running; then
+    c_green "  ✓ daemon process running (manual)"
+  else
+    c_red "  ✗ manual daemon is not running"
     tail -20 "$DAEMON_ERR" 2>/dev/null || true
     exit 1
   fi
@@ -1013,8 +1099,10 @@ step "DONE. Bridge is installed and running."
 
 if [[ "$SERVICE_MGR" == "launchd" ]]; then
   VERIFY_CMD="launchctl print gui/$(id -u)/$LABEL"
-else
+elif [[ "$SERVICE_MGR" == "systemd" ]]; then
   VERIFY_CMD="systemctl --user status cowork-to-code-bridge.service"
+else
+  VERIFY_CMD="test -f $BRIDGE_ROOT/daemon.pid && kill -0 \$(cat $BRIDGE_ROOT/daemon.pid) && tail -3 $DAEMON_LOG"
 fi
 
 cat <<DONE
