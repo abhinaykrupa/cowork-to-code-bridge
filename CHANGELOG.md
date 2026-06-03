@@ -7,6 +7,11 @@ All notable changes to this project. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Linux without systemd (#18).** Containers and minimal distros without a
+  working `systemctl --user` bus install via a manual daemon path: `setsid` or
+  `nohup`, PID file, optional `@reboot` cron, and `start-daemon.sh`. See
+  [docs/LINUX-NO-SYSTEMD.md](docs/LINUX-NO-SYSTEMD.md). WSL without systemd
+  still requires enabling systemd.
 - **Reverse direction (Claude Code → Cowork), v1 async inbox (#34).**
   `request_cowork.sh` lets Claude Code on the machine drop a request into
   `BRIDGE_ROOT/to_cowork/`; a Cowork session picks it up next time one is open

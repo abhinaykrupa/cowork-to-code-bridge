@@ -104,6 +104,46 @@ def remove_plist() -> bool:
 
 
 SYSTEMD_UNIT = Path.home() / ".config" / "systemd" / "user" / "cowork-to-code-bridge.service"
+BRIDGE_CRON_MARKER = "# cowork-to-code-bridge @reboot"
+
+
+def stop_manual_daemon(bridge_root: Path) -> bool:
+    """Linux: stop a setsid/nohup daemon and remove @reboot cron. True if anything done."""
+    did = False
+    pidfile = bridge_root / "daemon.pid"
+    if pidfile.exists():
+        try:
+            pid = int(pidfile.read_text().strip())
+            os.kill(pid, 15)
+        except (OSError, ValueError):
+            pass
+        pidfile.unlink(missing_ok=True)
+        did = True
+    starter = bridge_root / "start-daemon.sh"
+    starter_path = str(starter)
+    import shutil as _sh
+    if _sh.which("crontab"):
+        try:
+            existing = subprocess.run(
+                ["crontab", "-l"], capture_output=True, text=True, check=False,
+            ).stdout or ""
+            if BRIDGE_CRON_MARKER in existing:
+                lines = [
+                    ln for ln in existing.splitlines()
+                    if BRIDGE_CRON_MARKER not in ln and starter_path not in ln
+                ]
+                proc = subprocess.run(
+                    ["crontab", "-"], input="\n".join(lines) + "\n",
+                    capture_output=True, text=True, check=False,
+                )
+                if proc.returncode == 0:
+                    did = True
+        except OSError:
+            pass
+    if starter.exists():
+        starter.unlink()
+        did = True
+    return did
 
 
 def stop_systemd() -> bool:
@@ -228,7 +268,11 @@ def main() -> int:
 
     # ─── 1. Stop + remove the background service (launchd or systemd) ──────────
     if platform.system() == "Linux":
-        step("Stopping systemd --user service")
+        step("Stopping background daemon (manual + systemd)")
+        if stop_manual_daemon(bridge_root):
+            print(green("  ✓ manual daemon stopped + cron/start script removed"))
+        else:
+            print("  (no manual daemon found)")
         if stop_systemd():
             print(green("  ✓ systemd service stopped + unit removed"))
         else:

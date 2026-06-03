@@ -9,9 +9,10 @@ Start with a [good first issue →](https://github.com/abhinaykrupa/cowork-to-co
 
 ## Ground rules
 
-- **Platforms:** macOS (launchd), Linux (systemd --user), and WSL2 (same systemd
-  path inside Ubuntu). Native Windows (Task Scheduler) is not implemented yet —
-  open an issue before a large Windows-only PR.
+- **Platforms:** macOS (launchd), Linux (`systemd --user` when available, or
+  the [manual no-systemd path](docs/LINUX-NO-SYSTEMD.md) for containers/minimal
+  distros), and WSL2 (systemd inside Ubuntu). Native Windows (Task Scheduler) is
+  not implemented yet — open an issue before a large Windows-only PR.
 - **No new runtime dependencies.** The client and daemon are deliberately pure
   Python standard library. Keep them dependency-free.
 - **Don't break the safety model.** The daemon must only run whitelisted scripts,
@@ -34,6 +35,7 @@ python3 -m pip install -e ".[dev]"   # pytest + ruff
 pytest -q          # full test suite (unit + e2e + sync guards)
 ruff check .       # lint
 bash -n install.sh # shell syntax check
+bash -n scripts/lib/platform.sh scripts/lib/daemon_service.sh
 ```
 
 If you prefer shortcuts, the repository `Makefile` mirrors the core local workflow:
