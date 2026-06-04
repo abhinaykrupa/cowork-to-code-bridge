@@ -103,6 +103,7 @@ For simple, fast system queries, call a ready-made script directly:
 | "network status?" | `call_remote("scripts/mac_network.sh")` |
 | "what's listening on port 3000?" | `call_remote("scripts/port_check.sh", args=["3000"])` |
 | "what Docker containers are running?" | `call_remote("scripts/docker_ps.sh")` |
+| "what's the git status of ~/myproject?" | `call_remote("scripts/git_status.sh", args=["/path/to/repo"])` |
 | "any outdated packages?" | `call_remote("scripts/pkg_outdated.sh")` |
 
 For a repeatable custom action, help the user save a small script in

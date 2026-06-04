@@ -613,6 +613,15 @@ docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
 
 exit 0
 DPS
+cat > "$BRIDGE_ROOT/scripts/git_status.sh" <<'GS'
+#!/usr/bin/env bash
+# git_status.sh — git status in any repo directory.
+# Usage from Cowork: call_remote("scripts/git_status.sh", args=["/path/to/repo"])
+set -euo pipefail
+REPO="${1:-$PWD}"
+cd "$REPO"
+git status --short --branch
+GS
 cat > "$BRIDGE_ROOT/scripts/pkg_outdated.sh" <<'POD'
 #!/usr/bin/env bash
 # pkg_outdated.sh — list outdated system packages (macOS or Linux).
@@ -701,8 +710,8 @@ chmod +x "$BRIDGE_ROOT/scripts/request_cowork.sh"
 mkdir -p "$BRIDGE_ROOT/to_cowork" "$BRIDGE_ROOT/cowork_results"
 chmod 700 "$BRIDGE_ROOT/to_cowork" "$BRIDGE_ROOT/cowork_results" 2>/dev/null || true
 
-chmod +x "$BRIDGE_ROOT"/scripts/mac_*.sh "$BRIDGE_ROOT/scripts/port_check.sh" "$BRIDGE_ROOT/scripts/docker_ps.sh" "$BRIDGE_ROOT/scripts/pkg_outdated.sh"
-c_green "  ✓ scripts installed: ping, hello, run_claude, mac_health, mac_ram, mac_disk, mac_top, mac_network, port_check, docker_ps, pkg_outdated, request_cowork"
+chmod +x "$BRIDGE_ROOT"/scripts/mac_*.sh "$BRIDGE_ROOT/scripts/port_check.sh" "$BRIDGE_ROOT/scripts/docker_ps.sh" "$BRIDGE_ROOT/scripts/pkg_outdated.sh" "$BRIDGE_ROOT/scripts/git_status.sh"
+c_green "  ✓ scripts installed: ping, hello, run_claude, mac_health, mac_ram, mac_disk, mac_top, mac_network, port_check, docker_ps, pkg_outdated, git_status, request_cowork"
 
 # ─── 5b. Fetch the single-file Cowork client (one source of truth) ───────────
 # bridge_client.py is the EXACT file the Cowork sandbox imports. To avoid drift,
