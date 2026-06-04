@@ -38,6 +38,7 @@ Issues = "https://github.com/abhinaykrupa/cowork-to-code-bridge/issues"
 [project.scripts]
 cowork-to-code-bridge-daemon = "cowork_to_code_bridge.daemon:main"
 cowork-to-code-bridge-uninstall = "cowork_to_code_bridge.uninstall:main"
+cowork-to-code-bridge-selfcheck = "cowork_to_code_bridge.selfcheck:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

@@ -202,6 +202,35 @@ If you ask for something that doesn't have a script yet:
 
 ---
 
+## Verify your install
+
+Run this any time to confirm the bridge is healthy:
+
+```bash
+cowork-to-code-bridge-selfcheck
+```
+
+It checks six things and prints a clear PASS/FAIL for each:
+
+```
+cowork-to-code-bridge selfcheck
+  bridge root : /Users/you/.cowork-to-code-bridge
+  platform    : Darwin arm64
+
+  Bridge root        [PASS]  /Users/you/.cowork-to-code-bridge
+  Bridge token       [PASS]  set in /Users/you/.cowork-to-code-bridge/.env
+  Daemon registered  [PASS]  launchd: running (pid 1234)
+  Skill installed    [PASS]  /Users/you/.claude/skills/cowork-to-code-bridge
+  Ping round-trip    [PASS]  ping round-trip OK
+  claude CLI         [PASS]  /opt/homebrew/bin/claude
+
+  All checks passed. Bridge is healthy.
+```
+
+Exits 0 if all pass, 1 if any fail — safe to use in scripts or bug reports.
+
+---
+
 ## Uninstall
 
 One command, undoes everything the installer did:
