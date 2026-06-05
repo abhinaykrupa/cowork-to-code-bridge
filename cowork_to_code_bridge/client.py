@@ -75,6 +75,7 @@ def call_remote(
     env: dict[str, str] | None = None,
     bridge_root: Path | str | None = None,
     idempotency_key: str | None = None,
+    plan: str | None = None,
 ) -> dict[str, Any]:
     """Submit a script invocation to the Mac daemon and wait for its result.
 
@@ -94,6 +95,12 @@ def call_remote(
             operations (git push, deploy, money-moving) so a retry after
             TimeoutError is safe. Keys are persistent on the Mac via the
             daemon's journal — they survive daemon crashes and reboots.
+        plan: Optional plain-English description of what the task will do.
+            If ``scripts/approve_plan.sh`` exists on the machine, the daemon
+            runs it with the plan text before executing the main script.
+            The hook exits 0 to allow, 2 to reject (returning exit_code=-1
+            with the hook's stderr as the error message). If the hook is
+            absent the plan field is silently ignored.
 
     Returns:
         Dict with keys: id, exit_code, stdout, stderr, ts_completed.
@@ -125,6 +132,8 @@ def call_remote(
         payload["env"] = env
     if idempotency_key:
         payload["idempotency_key"] = idempotency_key
+    if plan is not None:
+        payload["plan"] = plan
 
     token = _load_token(root)
     if token:
@@ -165,6 +174,7 @@ def call_remote_streaming(
     bridge_root: Path | str | None = None,
     idempotency_key: str | None = None,
     on_progress=None,
+    plan: str | None = None,
 ) -> dict[str, Any]:
     """Like call_remote, but streams live output while the task runs.
 
@@ -198,6 +208,8 @@ def call_remote_streaming(
         payload["env"] = env
     if idempotency_key:
         payload["idempotency_key"] = idempotency_key
+    if plan is not None:
+        payload["plan"] = plan
     token = _load_token(root)
     if token:
         payload["token"] = token

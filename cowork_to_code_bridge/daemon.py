@@ -369,6 +369,53 @@ def run_one(cmd_path: Path, token_required: str | None,
         cmd_path.rename(PROCESSED / cmd_path.name)
         return
 
+    # ─── plan approval gate ───────────────────────────────────────────────────
+    # If (a) the command includes a "plan" field AND (b) scripts/approve_plan.sh
+    # exists, run the hook synchronously with the plan text on stdin before
+    # touching the main script. Exit 0 = proceed. Exit 2 = reject (hook's
+    # stderr is returned to Cowork as the error message). Any other exit code
+    # is treated as an internal error and also blocks execution.
+    # If approve_plan.sh is absent the plan field is silently ignored.
+    plan_text = cmd.get("plan")
+    approve_hook = SCRIPTS_DIR / "approve_plan.sh"
+    if plan_text and approve_hook.exists():
+        log(f"  ⧖ {cmd_id}: running approve_plan.sh hook")
+        try:
+            hook_result = subprocess.run(
+                ["bash", str(approve_hook)],
+                input=str(plan_text),
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except subprocess.TimeoutExpired:
+            write_result(cmd_id, {
+                "exit_code": -1,
+                "error": "approve_plan.sh timed out after 30s",
+            })
+            log(f"  ✗ {cmd_id}: approve_plan.sh timed out")
+            cmd_path.rename(PROCESSED / cmd_path.name)
+            return
+        except Exception as e:
+            write_result(cmd_id, {"exit_code": -1, "error": f"approve_plan.sh error: {e}"})
+            log(f"  ✗ {cmd_id}: approve_plan.sh failed to run: {e}")
+            cmd_path.rename(PROCESSED / cmd_path.name)
+            return
+
+        if hook_result.returncode != 0:
+            _fallback = "plan rejected by approve_plan.sh"
+            rejection = (hook_result.stderr or hook_result.stdout or _fallback).strip()
+            write_result(cmd_id, {
+                "exit_code": -1,
+                "error": f"plan rejected: {rejection}",
+                "plan_rejected": True,
+            })
+            _rc = hook_result.returncode
+            log(f"  ✗ {cmd_id}: plan rejected by hook (exit {_rc}): {rejection[:120]}")
+            cmd_path.rename(PROCESSED / cmd_path.name)
+            return
+        log(f"  ✓ {cmd_id}: plan approved by hook")
+
     # ─── validate script path ─────────────────────────────────────────────────
     script = cmd.get("script", "")
     if not SAFE_NAME.fullmatch(script):
