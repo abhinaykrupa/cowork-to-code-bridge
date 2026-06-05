@@ -87,18 +87,23 @@ def check_daemon_registered() -> tuple[bool, str]:
 
     if system == "Darwin":
         try:
+            # `launchctl list` (no label) gives columnar PID / Status / Label output.
+            # `launchctl list <label>` gives a plist dict — use the former for PID.
             result = subprocess.run(
-                ["launchctl", "list", PLIST_LABEL],
+                ["launchctl", "list"],
                 capture_output=True,
                 text=True,
             )
-            if result.returncode == 0:
-                # launchctl list output: PID  Status  Label
-                # PID is "-" when not running, a number when alive
-                first_col = result.stdout.split()[0] if result.stdout.strip() else "-"
-                if first_col != "-":
-                    return True, f"launchd: running (pid {first_col})"
-                return False, "launchd: registered but not running — try: launchctl start " + PLIST_LABEL
+            for line in result.stdout.splitlines():
+                if PLIST_LABEL in line:
+                    cols = line.split()
+                    pid = cols[0] if cols else "-"
+                    if pid != "-":
+                        return True, f"launchd: running (pid {pid})"
+                    return False, (
+                        f"launchd: registered but not running — "
+                        f"try: launchctl start {PLIST_LABEL}"
+                    )
             return False, f"launchd: not registered ({PLIST_LABEL}) — re-run installer"
         except FileNotFoundError:
             return False, "launchctl not found"
@@ -113,7 +118,8 @@ def check_daemon_registered() -> tuple[bool, str]:
             status = result.stdout.strip()
             if status == "active":
                 return True, "systemd --user: active"
-            return False, f"systemd --user: {status or 'unknown'} — try: systemctl --user start {SYSTEMD_UNIT}"
+            hint = f"try: systemctl --user start {SYSTEMD_UNIT}"
+            return False, f"systemd --user: {status or 'unknown'} — {hint}"
         except FileNotFoundError:
             return False, "systemctl not found"
 
