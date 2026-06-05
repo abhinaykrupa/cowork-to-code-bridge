@@ -73,6 +73,7 @@ def call_remote(
     env: dict[str, str] | None = None,
     bridge_root: Path | str | None = None,
     idempotency_key: str | None = None,
+    plan: str | None = None,
 ) -> dict[str, Any]:
     """Submit a script invocation to the Mac daemon and wait for its result.
 
@@ -81,6 +82,8 @@ def call_remote(
       - `idempotency_key` makes retries safe: same key => the daemon runs the
         script once and returns the cached result (annotated idempotent_replay).
       - exit_code -4 = daemon crashed mid-run; treat as indeterminate.
+      - `plan` is an optional plain-English description of what the task will do.
+        If approve_plan.sh exists on the machine the daemon runs it first.
     Raises TimeoutError if the daemon doesn't respond within timeout + 5s.
     """
     root = Path(bridge_root) if bridge_root else _resolve_bridge_root()
@@ -103,6 +106,8 @@ def call_remote(
         payload["env"] = env
     if idempotency_key:
         payload["idempotency_key"] = idempotency_key
+    if plan is not None:
+        payload["plan"] = plan
 
     token = _load_token(root)
     if token:
@@ -134,7 +139,8 @@ def call_remote(
 
 def call_remote_streaming(script, args=None, timeout=600, poll_interval=1.0,
                           cwd=None, env=None, bridge_root=None,
-                          idempotency_key=None, on_progress=None) -> dict[str, Any]:
+                          idempotency_key=None, on_progress=None,
+                          plan=None) -> dict[str, Any]:
     """Like call_remote, but streams live output while the task runs.
 
     The daemon tees the script's output to progress/<id>.log; this polls it and
@@ -151,6 +157,7 @@ def call_remote_streaming(script, args=None, timeout=600, poll_interval=1.0,
     if cwd: payload["cwd"] = cwd
     if env: payload["env"] = env
     if idempotency_key: payload["idempotency_key"] = idempotency_key
+    if plan is not None: payload["plan"] = plan
     token = _load_token(root)
     if token: payload["token"] = token
     cmd_file = queue / f"{cmd_id}.json"
