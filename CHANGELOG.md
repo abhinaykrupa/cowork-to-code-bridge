@@ -7,6 +7,10 @@ All notable changes to this project. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **`docker_logs.sh` starter script (#21).** Tail a container's logs (`CONTAINER`
+  required, optional line count default 50). Clear errors when Docker is
+  unavailable or the container does not exist. Wired into install, README, and
+  skill table.
 - **Plan approval gate (#48).** Optional `approve_plan.sh` hook: if present, the
   daemon runs it with the task's `plan` text on stdin before executing. Exit 0
   proceeds; non-zero rejects and returns the hook's message to Cowork. Hook

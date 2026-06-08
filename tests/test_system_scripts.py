@@ -214,3 +214,45 @@ def test_open_browser_rejects_unsafe_urls(new_scripts: Path) -> None:
     assert _run(new_scripts / "open_browser.sh", "/etc/passwd").returncode != 0
     # a non-http scheme
     assert _run(new_scripts / "open_browser.sh", "ftp://example.com").returncode != 0
+
+
+# ── docker_logs.sh (#21) ─────────────────────────────────────────────────────
+
+DOCKER_SCRIPTS = [
+    ("docker_logs.sh", "DLG"),
+]
+
+
+@pytest.mark.parametrize(("script_name", "marker"), DOCKER_SCRIPTS)
+def test_docker_logs_example_matches_install_template(script_name: str, marker: str) -> None:
+    example_path = REPO_ROOT / "examples" / "allowed_scripts" / script_name
+    assert example_path.read_text() == _extract_script(script_name, marker)
+
+
+@pytest.fixture()
+def docker_logs_script(tmp_path: Path) -> Path:
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    script_path = scripts_dir / "docker_logs.sh"
+    script_path.write_text(_extract_script("docker_logs.sh", "DLG"))
+    script_path.chmod(0o755)
+    return script_path
+
+
+def test_docker_logs_requires_container(docker_logs_script: Path) -> None:
+    result = _run(docker_logs_script)
+    assert result.returncode != 0
+    assert "Usage:" in result.stderr
+
+
+def test_docker_logs_rejects_invalid_lines(docker_logs_script: Path) -> None:
+    result = _run(docker_logs_script, "somecontainer", "notanumber")
+    assert result.returncode != 0
+
+
+def test_docker_logs_container_not_found(docker_logs_script: Path) -> None:
+    if subprocess.run(["which", "docker"], capture_output=True).returncode != 0:
+        pytest.skip("docker not available")
+    result = _run(docker_logs_script, "definitely-not-a-bridge-container-xyz")
+    assert result.returncode == 1
+    assert "not found" in result.stderr.lower()
