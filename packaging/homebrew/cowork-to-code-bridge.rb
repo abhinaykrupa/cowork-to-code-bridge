@@ -4,7 +4,6 @@ class CoworkToCodeBridge < Formula
   url "https://github.com/abhinaykrupa/cowork-to-code-bridge/archive/refs/tags/v0.5.0.tar.gz"
   sha256 "b2e1baa3343716f92bf0f4d7903af62811449231ec11d68d4b184b0068502c71"
   license "MIT"
-  version "0.5.0"
 
   depends_on :macos
   depends_on "openssl@3"
@@ -36,7 +35,7 @@ class CoworkToCodeBridge < Formula
   end
 
   test do
-    assert_predicate libexec/"install.sh", :exist?
+    assert_path_exists libexec/"install.sh"
     assert_predicate libexec/"install.sh", :executable?
   end
 end

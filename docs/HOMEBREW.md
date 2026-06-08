@@ -76,14 +76,16 @@ On each new GitHub release (e.g. `v0.5.1`):
 2. Update **`packaging/homebrew/cowork-to-code-bridge.rb`** in this repo:
    - `url` → new tag tarball
    - `sha256` → new hash
-   - `version` → new semver (without `v` prefix)
 
 3. Copy the updated formula to **`abhinaykrupa/homebrew-tap`** (`Formula/cowork-to-code-bridge.rb`).
 
 4. Run locally (macOS):
 
    ```bash
-   brew audit --strict packaging/homebrew/cowork-to-code-bridge.rb
+   tap_dir="$(brew --repository)/Library/Taps/local/homebrew-tap/Formula"
+   mkdir -p "$tap_dir"
+   cp packaging/homebrew/cowork-to-code-bridge.rb "$tap_dir/"
+   brew audit --strict local/tap/cowork-to-code-bridge
    ```
 
 ---
