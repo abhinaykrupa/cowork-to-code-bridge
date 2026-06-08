@@ -7,6 +7,24 @@ All notable changes to this project. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Plan approval gate (#48).** Optional `approve_plan.sh` hook: if present, the
+  daemon runs it with the task's `plan` text on stdin before executing. Exit 0
+  proceeds; non-zero rejects and returns the hook's message to Cowork. Hook
+  absent = silent no-op. Ships as a no-op template with pattern-blocking,
+  notification, and interactive-approval sections to uncomment.
+- **Four new starter scripts (#29, #55, #11, #57).**
+  `list_scripts.sh` (discover every runnable script with descriptions),
+  `env_check.sh` (PATH / BRIDGE_ROOT / CLAUDE_FLAGS / claude-CLI snapshot that
+  never prints the token value), `disk_hogs.sh` (biggest files/dirs in a path,
+  with arg validation), and `open_browser.sh` (open an http(s)/localhost URL;
+  rejects `file://` and bare paths).
+- **SECURITY.md.** Coordinated-disclosure policy + a "what it can / cannot do to
+  your machine" table and honest threat model. Lights up the GitHub Security tab.
+- **"How it compares" README section (#39).** Honest table vs Cowork alone,
+  Claude Code on the web, Remote Control, MCP, SSH/self-hosted, and this bridge —
+  including the cases where you don't need the bridge.
+- **Custom social-preview card.** `docs/social-card.png` (1280×640) so shared
+  GitHub links render a real card instead of a gray box.
 - **Linux without systemd (#18).** Containers and minimal distros without a
   working `systemctl --user` bus install via a manual daemon path: `setsid` or
   `nohup`, PID file, optional `@reboot` cron, and `start-daemon.sh`. See
