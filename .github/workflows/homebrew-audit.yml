@@ -1,0 +1,21 @@
+name: Homebrew audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packaging/homebrew/**"
+      - ".github/workflows/homebrew-audit.yml"
+  pull_request:
+    paths:
+      - "packaging/homebrew/**"
+      - ".github/workflows/homebrew-audit.yml"
+
+jobs:
+  audit:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Audit formula
+        run: brew audit --strict packaging/homebrew/cowork-to-code-bridge.rb

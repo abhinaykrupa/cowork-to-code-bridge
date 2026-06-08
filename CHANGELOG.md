@@ -7,6 +7,9 @@ All notable changes to this project. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Homebrew formula (#37).** macOS install via `brew install abhinaykrupa/tap/cowork-to-code-bridge`
+  once the maintainer tap repo exists; canonical formula in `packaging/homebrew/`,
+  demo tap at `EagleEye-0101/tap`, and [docs/HOMEBREW.md](docs/HOMEBREW.md).
 - **Plan approval gate (#48).** Optional `approve_plan.sh` hook: if present, the
   daemon runs it with the task's `plan` text on stdin before executing. Exit 0
   proceeds; non-zero rejects and returns the hook's message to Cowork. Hook

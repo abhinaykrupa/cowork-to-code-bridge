@@ -40,7 +40,19 @@ Because Claude Code can run things on your Mac, a useful **side benefit** is tha
 
 ## Install — two pastes total
 
-**Step 1 — on your machine (once).** Open Terminal (`Cmd + Space` → **Terminal**), paste this, press Enter:
+**Step 1 — on your machine (once).** Open Terminal (`Cmd + Space` → **Terminal**).
+
+**macOS (Homebrew)** — once the [maintainer tap](docs/HOMEBREW.md) is published:
+
+```bash
+brew install abhinaykrupa/tap/cowork-to-code-bridge
+```
+
+Until then, a [demo tap](docs/HOMEBREW.md#install-demo-tap-before-production-tap-exists) is available:
+`brew tap EagleEye-0101/tap && brew install cowork-to-code-bridge`. Full Homebrew notes:
+**[docs/HOMEBREW.md](docs/HOMEBREW.md)**.
+
+**macOS / Linux / WSL2 (curl)** — paste this, press Enter:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/abhinaykrupa/cowork-to-code-bridge/main/install.sh | bash
