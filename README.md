@@ -197,6 +197,7 @@ The install gives you these to start:
 - `mac_network.sh` — network status and connectivity
 - `port_check.sh` — shows what is listening on a TCP port
 - `docker_ps.sh` — lists running Docker containers
+- `docker_logs.sh` — tail a container's logs (optional line count, default 50)
 - `git_status.sh` — `git status --short --branch` in any repo directory (pass the path as an argument)
 - `pkg_outdated.sh` — lists outdated packages (brew on macOS; apt/dnf/yum/pacman on Linux)
 - `list_scripts.sh` — lists every script the bridge can run, with descriptions (so Cowork can discover what's available)
