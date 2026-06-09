@@ -160,9 +160,39 @@ For simple, fast system queries, call a ready-made script directly:
 | "what Docker containers are running?" | `call_remote("scripts/docker_ps.sh")` |
 | "what's the git status of ~/myproject?" | `call_remote("scripts/git_status.sh", args=["/path/to/repo"])` |
 | "any outdated packages?" | `call_remote("scripts/pkg_outdated.sh")` |
+| "what MCPs do you have on your machine?" | `call_remote("scripts/mcp_audit.sh")` |
 
 For a repeatable custom action, help the user save a small script in
 `~/.cowork-to-code-bridge/scripts/` on their Mac, then call it by name.
+
+### Cross-surface MCP audit
+
+There is no built-in Anthropic tool to compare MCPs registered in local Claude
+Code vs what a Cowork session can reach (ref: anthropics/claude-code#56353).
+`mcp_audit.sh` captures the local side so you can diff it here:
+
+```python
+import json
+
+r = call_remote("scripts/mcp_audit.sh")
+local = json.loads(r["stdout"])
+
+print(f"Machine: {local['hostname']}  (Claude Code {local['claude_version']})")
+print(f"Registered MCPs: {local.get('mcp_count', '?')}")
+
+# If structured JSON is available (Claude Code >= recent version):
+for mcp in local.get("mcps", []):
+    print(f"  [{mcp.get('scope','?')}] {mcp.get('name','?')}  type={mcp.get('type','?')}")
+
+# If older Claude Code (plain-text fallback):
+if "mcps_raw" in local:
+    print(local["mcps_raw"])
+```
+
+Compare the names in `local["mcps"]` against the connectors/plugins visible in
+this Cowork session. Any MCP present locally but absent here is a gap —
+the user may need to install the corresponding Cowork plugin or expose the
+MCP via the bridge.
 
 ## Step 4 — check the inbox (reverse direction: Claude Code → Cowork)
 

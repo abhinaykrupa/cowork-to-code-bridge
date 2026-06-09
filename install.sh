@@ -693,8 +693,98 @@ chmod +x "$BRIDGE_ROOT/scripts/request_cowork.sh"
 mkdir -p "$BRIDGE_ROOT/to_cowork" "$BRIDGE_ROOT/cowork_results"
 chmod 700 "$BRIDGE_ROOT/to_cowork" "$BRIDGE_ROOT/cowork_results" 2>/dev/null || true
 
+# mcp_audit.sh — cross-surface MCP audit.
+# Addresses: anthropics/claude-code#56353 — no first-class tool to compare
+# MCPs registered in local Claude Code vs what a Cowork session can reach.
+# This script runs on the machine side; Cowork receives the JSON output and
+# can diff it against its own session's available connectors/plugins.
+cat > "$BRIDGE_ROOT/scripts/mcp_audit.sh" <<'MCPAUDIT'
+#!/usr/bin/env bash
+# mcp_audit.sh — enumerate MCPs registered in local Claude Code (all scopes).
+#
+# Motivation
+# ----------
+# `claude mcp list` only shows one surface at a time. There is no built-in
+# tool to compare what's registered locally vs what a remote surface (e.g.
+# Cowork) can reach. This script captures the local side so Cowork can
+# produce a side-by-side diff of local MCPs vs Cowork-reachable connectors.
+# (ref: anthropics/claude-code#56353, labeled area:mcp + enhancement)
+#
+# Usage from Cowork
+# -----------------
+#   r = call_remote("scripts/mcp_audit.sh")
+#   # r["stdout"] contains JSON with the local MCP registry snapshot
+#
+# Output format
+# -------------
+# {"claude_version":"...","mcps":[{"scope":"...","name":"...","type":"...","command":"..."},...]}
+# Falls back to {"claude_version":"...","mcps_raw":"<plain text>"} for older
+# Claude Code versions that do not support --output-format json on mcp list.
+set -uo pipefail
+
+find_claude() {
+  local p; p="$(command -v claude 2>/dev/null || true)"
+  if [[ -n "$p" && -x "$p" ]]; then echo "$p"; return 0; fi
+  local cand
+  for cand in /opt/homebrew/bin/claude /usr/local/bin/claude \
+              "$HOME/.local/bin/claude" "$HOME/.claude/bin/claude"; do
+    [[ -x "$cand" ]] && { echo "$cand"; return 0; }
+  done
+  local appdir="$HOME/Library/Application Support/Claude/claude-code"
+  if [[ -d "$appdir" ]]; then
+    local b; b="$(find "$appdir" -maxdepth 4 -type f -name claude -perm -u+x 2>/dev/null | sort -V | tail -1)"
+    [[ -n "$b" && -x "$b" ]] && { echo "$b"; return 0; }
+  fi
+  return 1
+}
+
+CLAUDE_BIN="$(find_claude 2>/dev/null || true)"
+if [[ -z "${CLAUDE_BIN:-}" ]]; then
+  printf '{"error":"claude CLI not found — install it: curl -fsSL https://claude.ai/install.sh | bash","mcps":[]}\n'
+  exit 127
+fi
+
+CLAUDE_VERSION="$("$CLAUDE_BIN" --version 2>/dev/null | head -1 | tr -d '\n' || echo 'unknown')"
+HOSTNAME_VAL="$(hostname 2>/dev/null || echo 'unknown')"
+TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo 'unknown')"
+
+# Try JSON output (supported in Claude Code >= 1.x with mcp list --output-format).
+# If the flag is unrecognised, fall back to plain-text and wrap it.
+if MCP_JSON="$("$CLAUDE_BIN" mcp list --output-format json 2>/dev/null)" && \
+   echo "$MCP_JSON" | python3 -c "import json,sys; json.load(sys.stdin)" 2>/dev/null; then
+  # Wrap with audit metadata so Cowork has context alongside the raw list.
+  python3 - "$CLAUDE_VERSION" "$HOSTNAME_VAL" "$TIMESTAMP" "$MCP_JSON" <<'PY'
+import json, sys
+version, host, ts, raw = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+mcps = json.loads(raw) if isinstance(json.loads(raw), list) else json.loads(raw).get("mcps", json.loads(raw))
+print(json.dumps({
+    "claude_version": version,
+    "hostname": host,
+    "timestamp": ts,
+    "mcp_count": len(mcps) if isinstance(mcps, list) else "unknown",
+    "mcps": mcps,
+}))
+PY
+else
+  # Older Claude Code: plain-text fallback.
+  MCP_TEXT="$("$CLAUDE_BIN" mcp list 2>&1 || echo '(no MCPs registered or command failed)')"
+  python3 - "$CLAUDE_VERSION" "$HOSTNAME_VAL" "$TIMESTAMP" "$MCP_TEXT" <<'PY'
+import json, sys
+version, host, ts, text = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+print(json.dumps({
+    "claude_version": version,
+    "hostname": host,
+    "timestamp": ts,
+    "note": "plain-text fallback (upgrade claude CLI for structured JSON output)",
+    "mcps_raw": text,
+}))
+PY
+fi
+MCPAUDIT
+chmod +x "$BRIDGE_ROOT/scripts/mcp_audit.sh"
+
 chmod +x "$BRIDGE_ROOT"/scripts/mac_*.sh "$BRIDGE_ROOT/scripts/port_check.sh" "$BRIDGE_ROOT/scripts/docker_ps.sh" "$BRIDGE_ROOT/scripts/pkg_outdated.sh" "$BRIDGE_ROOT/scripts/git_status.sh"
-c_green "  ✓ scripts installed: ping, hello, run_claude, mac_health, mac_ram, mac_disk, mac_top, mac_network, port_check, docker_ps, pkg_outdated, git_status, request_cowork"
+c_green "  ✓ scripts installed: ping, hello, run_claude, mac_health, mac_ram, mac_disk, mac_top, mac_network, port_check, docker_ps, pkg_outdated, git_status, request_cowork, mcp_audit"
 
 # ─── 5b. Fetch the single-file Cowork client (one source of truth) ───────────
 # bridge_client.py is the EXACT file the Cowork sandbox imports. To avoid drift,
@@ -808,7 +898,30 @@ Status dict keys: \`elapsed_s\` (int), \`last_line\` (str), \`state\` ("running"
 \`exit_code\` is added on final write. The file is cleaned up after the result is written.
 
 ## Step 3 — quick system checks (no agent)
-\`call_remote("scripts/mac_health.sh")\` · \`mac_ram.sh\` · \`mac_disk.sh\` · \`mac_top.sh\` · \`mac_network.sh\` · \`port_check.sh\` · \`docker_ps.sh\` · \`pkg_outdated.sh\` · \`git_status.sh <path>\`
+\`call_remote("scripts/mac_health.sh")\` · \`mac_ram.sh\` · \`mac_disk.sh\` · \`mac_top.sh\` · \`mac_network.sh\` · \`port_check.sh\` · \`docker_ps.sh\` · \`pkg_outdated.sh\` · \`git_status.sh <path>\` · \`mcp_audit.sh\`
+
+## Step 3b — cross-surface MCP audit
+
+Compare MCPs registered in local Claude Code against what this Cowork session can reach.
+Surfaces gaps like "Postgres MCP on machine but not reachable from Cowork".
+(Addresses anthropics/claude-code#56353 — no first-class cross-surface MCP diff tool.)
+
+\`\`\`python
+import json
+r = call_remote("scripts/mcp_audit.sh")
+local = json.loads(r["stdout"])
+
+# local["mcps"]     → list of MCPs registered in Claude Code on the machine
+# local["hostname"] → which machine (useful for multi-machine setups)
+# local["claude_version"] → Claude Code version on the machine
+
+# Print what's registered locally
+for mcp in local.get("mcps", []):
+    print(f"  [{mcp.get('scope','?')}] {mcp.get('name','?')}  ({mcp.get('type','?')})")
+
+# Compare against this session's available connectors/plugins and highlight gaps:
+# local MCPs not reachable here → suggest mounting or installing the MCP in Cowork
+\`\`\`
 
 ## Results
 Dict with exit_code/stdout/stderr. Codes: -1 refused, -2 timeout, -3 internal,
