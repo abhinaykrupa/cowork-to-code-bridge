@@ -1,6 +1,6 @@
 [project]
 name = "cowork-to-code-bridge"
-version = "0.5.0"
+version = "0.5.1"
 description = "Connect Claude Cowork to Claude Code on your own computer (macOS or Linux) via a small, idempotent, file-based bridge daemon. Cowork hands tasks to a local Claude Code agent (and can run approved scripts)."
 readme = "README.md"
 requires-python = ">=3.10"

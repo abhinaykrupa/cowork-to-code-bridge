@@ -613,6 +613,51 @@ docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
 
 exit 0
 DPS
+cat > "$BRIDGE_ROOT/scripts/docker_logs.sh" <<'DLG'
+#!/usr/bin/env bash
+# docker_logs.sh — tail a container's logs (macOS or Linux).
+# Args: $1 = container name/ID (required), $2 = line count (optional, default 50).
+# Usage from Cowork: call_remote("scripts/docker_logs.sh", args=["my-app", "100"])
+set -u
+
+usage() {
+  echo "Usage: $0 CONTAINER [LINES]" >&2
+  exit 2
+}
+
+CONTAINER="${1:-}"
+LINES="${2:-50}"
+
+[[ -n "$CONTAINER" ]] || usage
+
+case "$LINES" in
+  *[!0-9]*|'') usage ;;
+esac
+if [ "$LINES" -lt 1 ] || [ "$LINES" -gt 10000 ]; then
+  echo "LINES must be a number from 1 to 10000." >&2
+  exit 2
+fi
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Docker is not installed or not in PATH." >&2
+  exit 1
+fi
+
+if ! docker info >/dev/null 2>&1; then
+  echo "Docker is installed but the daemon is not running or not reachable." >&2
+  exit 1
+fi
+
+if ! docker inspect "$CONTAINER" >/dev/null 2>&1; then
+  echo "Container not found: $CONTAINER" >&2
+  exit 1
+fi
+
+echo "=== DOCKER LOGS (last $LINES lines): $CONTAINER ==="
+docker logs --tail "$LINES" "$CONTAINER"
+
+exit 0
+DLG
 cat > "$BRIDGE_ROOT/scripts/git_status.sh" <<'GS'
 #!/usr/bin/env bash
 # git_status.sh — git status in any repo directory.
@@ -815,8 +860,8 @@ chmod +x "$BRIDGE_ROOT/scripts/request_cowork.sh"
 mkdir -p "$BRIDGE_ROOT/to_cowork" "$BRIDGE_ROOT/cowork_results"
 chmod 700 "$BRIDGE_ROOT/to_cowork" "$BRIDGE_ROOT/cowork_results" 2>/dev/null || true
 
-chmod +x "$BRIDGE_ROOT"/scripts/mac_*.sh "$BRIDGE_ROOT/scripts/port_check.sh" "$BRIDGE_ROOT/scripts/docker_ps.sh" "$BRIDGE_ROOT/scripts/pkg_outdated.sh" "$BRIDGE_ROOT/scripts/git_status.sh" "$BRIDGE_ROOT/scripts/list_scripts.sh" "$BRIDGE_ROOT/scripts/env_check.sh" "$BRIDGE_ROOT/scripts/disk_hogs.sh" "$BRIDGE_ROOT/scripts/open_browser.sh"
-c_green "  ✓ scripts installed: ping, hello, run_claude, mac_health, mac_ram, mac_disk, mac_top, mac_network, port_check, docker_ps, pkg_outdated, git_status, list_scripts, env_check, disk_hogs, open_browser, request_cowork"
+chmod +x "$BRIDGE_ROOT"/scripts/mac_*.sh "$BRIDGE_ROOT/scripts/port_check.sh" "$BRIDGE_ROOT/scripts/docker_ps.sh" "$BRIDGE_ROOT/scripts/docker_logs.sh" "$BRIDGE_ROOT/scripts/pkg_outdated.sh" "$BRIDGE_ROOT/scripts/git_status.sh" "$BRIDGE_ROOT/scripts/list_scripts.sh" "$BRIDGE_ROOT/scripts/env_check.sh" "$BRIDGE_ROOT/scripts/disk_hogs.sh" "$BRIDGE_ROOT/scripts/open_browser.sh"
+c_green "  ✓ scripts installed: ping, hello, run_claude, mac_health, mac_ram, mac_disk, mac_top, mac_network, port_check, docker_ps, docker_logs, pkg_outdated, git_status, list_scripts, env_check, disk_hogs, open_browser, request_cowork"
 
 # ─── 5b. Fetch the single-file Cowork client (one source of truth) ───────────
 # bridge_client.py is the EXACT file the Cowork sandbox imports. To avoid drift,
@@ -893,7 +938,7 @@ Always pass a unique \`idempotency_key\` — Claude Code tasks have side effects
 retry must not run twice.
 
 ## Step 3 — quick system checks (no agent)
-\`call_remote("scripts/mac_health.sh")\` · \`mac_ram.sh\` · \`mac_disk.sh\` · \`mac_top.sh\` · \`mac_network.sh\` · \`port_check.sh\` · \`docker_ps.sh\` · \`pkg_outdated.sh\` · \`git_status.sh <path>\`
+\`call_remote("scripts/mac_health.sh")\` · \`mac_ram.sh\` · \`mac_disk.sh\` · \`mac_top.sh\` · \`mac_network.sh\` · \`port_check.sh\` · \`docker_ps.sh\` · \`docker_logs.sh\` · \`pkg_outdated.sh\` · \`git_status.sh <path>\`
 
 ## Results
 Dict with exit_code/stdout/stderr. Codes: -1 refused, -2 timeout, -3 internal,
@@ -936,7 +981,7 @@ Always pass a unique idempotency_key (tasks have side effects). For long builds,
 use call_remote_streaming(..., on_progress=cb).
 
 ## Quick checks (no agent)
-scripts/mac_health.sh · mac_ram.sh · mac_disk.sh · mac_top.sh · mac_network.sh · port_check.sh <port> · docker_ps.sh · pkg_outdated.sh · git_status.sh <path>
+scripts/mac_health.sh · mac_ram.sh · mac_disk.sh · mac_top.sh · mac_network.sh · port_check.sh <port> · docker_ps.sh · docker_logs.sh <container> · pkg_outdated.sh · git_status.sh <path>
 
 Results: dict with exit_code/stdout/stderr (-1 refused, -2 timeout, -3 internal,
 -4 crashed). Never claim success without exit_code 0 / BRIDGE LIVE.

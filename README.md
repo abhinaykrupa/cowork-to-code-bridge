@@ -4,7 +4,7 @@
 [![Stars](https://img.shields.io/github/stars/abhinaykrupa/cowork-to-code-bridge?style=social)](https://github.com/abhinaykrupa/cowork-to-code-bridge/stargazers)
 [![Release](https://img.shields.io/github/v/release/abhinaykrupa/cowork-to-code-bridge?display_name=tag)](https://github.com/abhinaykrupa/cowork-to-code-bridge/releases)
 [![Downloads](https://img.shields.io/github/downloads/abhinaykrupa/cowork-to-code-bridge/total?logo=github)](https://github.com/abhinaykrupa/cowork-to-code-bridge/releases)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20WSL2-lightgrey)](#)
 
 > ⭐ **If this saves you time, [a star helps others find it](https://github.com/abhinaykrupa/cowork-to-code-bridge/stargazers).** It takes one click.
@@ -12,10 +12,10 @@
 **Let Claude run code on your real machine — safely — from any Claude chat.**
 
 <p align="center">
-  <img src="./docs/demo.svg" alt="Cowork hands a 'build me a Flask app' task to Claude Code on your machine; it scaffolds, installs, runs, and verifies it — then reports back." width="100%">
+  <img src="https://raw.githubusercontent.com/abhinaykrupa/cowork-to-code-bridge/main/docs/demo.svg" alt="Cowork hands a 'build me a Flask app' task to Claude Code on your machine; it scaffolds, installs, runs, and verifies it — then reports back." width="100%">
 </p>
 
-> 🖥️ **macOS, Linux, and WSL2.** Works on your Mac (launchd), a Linux box/server (systemd, or a [manual path](docs/LINUX-NO-SYSTEMD.md) for containers/minimal distros), or **Windows via WSL2** (systemd in Ubuntu). Native Windows isn't supported yet — see [docs/WSL.md](docs/WSL.md).
+> 🖥️ **macOS, Linux, and WSL2.** Works on your Mac (launchd), a Linux box/server (systemd, or a [manual path](https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/docs/LINUX-NO-SYSTEMD.md) for containers/minimal distros), or **Windows via WSL2** (systemd in Ubuntu). Native Windows isn't supported yet — see [docs/WSL.md](https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/docs/WSL.md).
 
 [Claude Cowork](https://claude.ai/cowork) (and Claude in your browser) is great at planning and editing, but it runs in a sealed cloud sandbox — it can't reach your actual machine. **Claude Code**, running on your computer, *can*: it has your shell, your repos, your tools, and full agent abilities.
 
@@ -36,7 +36,7 @@ Because Claude Code can run things on your Mac, a useful **side benefit** is tha
 > **Is it safe to let a cloud chat reach my machine?** Short answer: the bridge
 > opens **no network ports**, never uses `sudo`, runs **only scripts you approve**,
 > is gated by a secret token, and uninstalls completely with one command. Full
-> threat model in **[SECURITY.md](SECURITY.md)**.
+> threat model in **[SECURITY.md](https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/SECURITY.md)**.
 
 ## Install — two pastes total
 
@@ -78,12 +78,12 @@ Claude hands the work to Claude Code on your machine and brings the result back.
 
 ### Windows (WSL2)
 
-On Windows, install **inside WSL2** (Ubuntu), not PowerShell or Git Bash. You need [systemd enabled in WSL](docs/WSL.md#1-enable-systemd-in-wsl), then the same one-liner in your Ubuntu terminal. Full walkthrough: **[docs/WSL.md](docs/WSL.md)**.
+On Windows, install **inside WSL2** (Ubuntu), not PowerShell or Git Bash. You need [systemd enabled in WSL](https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/docs/WSL.md#1-enable-systemd-in-wsl), then the same one-liner in your Ubuntu terminal. Full walkthrough: **[docs/WSL.md](https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/docs/WSL.md)**.
 
 <details>
 <summary>What the installer puts where (for the curious / developers)</summary>
 
-- **Daemon** → runs from `~/.cowork-to-code-bridge/`, managed by launchd (macOS), systemd --user (Linux), or a [manual path](docs/LINUX-NO-SYSTEMD.md) when systemd is unavailable.
+- **Daemon** → runs from `~/.cowork-to-code-bridge/`, managed by launchd (macOS), systemd --user (Linux), or a [manual path](https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/docs/LINUX-NO-SYSTEMD.md) when systemd is unavailable.
 - **Global skill** → `~/.claude/skills/cowork-to-code-bridge/` (SKILL.md + `bridge_client.py` + a `bridge_env.json` pointing at `BRIDGE_ROOT`).
 - **Whitelisted scripts** → `~/.cowork-to-code-bridge/scripts/` (`run_claude.sh`, `mac_health.sh`, …).
 - **`CLAUDE.md`** → written into `~/.cowork-to-code-bridge/` so the bridge self-documents once a Cowork session mounts the folder.
@@ -182,9 +182,9 @@ Mostly — and the parts that need your attention are spelled out honestly below
 - **Runs as you.** The bridge runs with your normal user permissions — nothing more, nothing less.
 - **Idempotent.** A retry won't double-run a task or script — repeated requests with the same key return the cached result.
 
-**The one thing to understand:** the headline script, `run_claude.sh`, hands a *free-form task* to a Claude Code agent on your Mac. That agent is as capable as Claude Code normally is — it can edit files, run commands, commit, push. That's the power you want, but it means a task from Cowork is acted on by a real agent with your machine's access. If you want to limit that, `run_claude.sh` has a clearly-marked spot to add restrictions (e.g. plan-only mode, or a tool allowlist) — see [the script](./examples/allowed_scripts/run_claude.sh) and [architecture docs](./docs/architecture.md). For fixed, predictable actions, prefer a specific script over `run_claude.sh`.
+**The one thing to understand:** the headline script, `run_claude.sh`, hands a *free-form task* to a Claude Code agent on your Mac. That agent is as capable as Claude Code normally is — it can edit files, run commands, commit, push. That's the power you want, but it means a task from Cowork is acted on by a real agent with your machine's access. If you want to limit that, `run_claude.sh` has a clearly-marked spot to add restrictions (e.g. plan-only mode, or a tool allowlist) — see [the script](https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/examples/allowed_scripts/run_claude.sh) and [architecture docs](https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/docs/architecture.md). For fixed, predictable actions, prefer a specific script over `run_claude.sh`.
 
-**Optional: plan approval gate.** If you want a programmatic last line of defense before any task runs, copy [`examples/allowed_scripts/approve_plan.sh`](./examples/allowed_scripts/approve_plan.sh) to `~/.cowork-to-code-bridge/scripts/approve_plan.sh` and make it executable. When Cowork submits a task with a `plan` field, the bridge runs your hook first — exit 0 to proceed, exit 2 to reject (the hook's message is returned to Cowork). The hook can block schema migrations, send you a phone notification, or require an interactive keystroke. If the file doesn't exist, the plan field is silently ignored and nothing changes.
+**Optional: plan approval gate.** If you want a programmatic last line of defense before any task runs, copy [`examples/allowed_scripts/approve_plan.sh`](https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/examples/allowed_scripts/approve_plan.sh) to `~/.cowork-to-code-bridge/scripts/approve_plan.sh` and make it executable. When Cowork submits a task with a `plan` field, the bridge runs your hook first — exit 0 to proceed, exit 2 to reject (the hook's message is returned to Cowork). The hook can block schema migrations, send you a phone notification, or require an interactive keystroke. If the file doesn't exist, the plan field is silently ignored and nothing changes.
 
 **Requirement for the Claude Code path:** `run_claude.sh` needs the Claude Code **CLI** (`claude`) installed on your Mac. **The Claude Desktop app alone is not enough** — it bundles its own copy but doesn't expose a `claude` command. If the CLI is missing, `run_claude.sh` tries to install it on the fly (`brew install claude-code`, or the official installer) and then proceeds; if that fails it returns the exact one-line install command. To turn off auto-install (and just get the install instructions instead), set `BRIDGE_CLAUDE_AUTOINSTALL=0`. The system-info scripts (`mac_health.sh`, etc.) don't need the CLI at all.
 
@@ -197,7 +197,7 @@ You can [uninstall it completely with one command](#uninstall) at any time.
 **The main thing: hand a task to Claude Code on your Mac.** The install ships a script called `run_claude.sh` that does exactly this. From Cowork you say something like *"have Claude Code on my Mac run the tests and fix what breaks"* and a real Claude Code agent on your machine carries it out, then reports back. That's the headline feature — Cowork delegating to a full local agent.
 
 For copy-paste examples that map Cowork requests to the bundled scripts, see
-**[Cowork Recipes](docs/RECIPES.md)**.
+**[Cowork Recipes](https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/docs/RECIPES.md)**.
 
 The install gives you these to start:
 
@@ -209,6 +209,7 @@ The install gives you these to start:
 - `mac_network.sh` — network status and connectivity
 - `port_check.sh` — shows what is listening on a TCP port
 - `docker_ps.sh` — lists running Docker containers
+- `docker_logs.sh` — tail a container's logs (optional line count, default 50)
 - `git_status.sh` — `git status --short --branch` in any repo directory (pass the path as an argument)
 - `pkg_outdated.sh` — lists outdated packages (brew on macOS; apt/dnf/yum/pacman on Linux)
 - `list_scripts.sh` — lists every script the bridge can run, with descriptions (so Cowork can discover what's available)
@@ -446,7 +447,7 @@ The realistic threats this *can't* defend against:
 ## FAQ
 
 **Q: Does this work on Linux or Windows?**
-**macOS** (launchd), **Linux** (`systemd --user` or the [no-systemd installer path](docs/LINUX-NO-SYSTEMD.md)), and **WSL2 on Windows** (systemd in your Ubuntu distro) are supported. **Native Windows** (PowerShell, Task Scheduler) is not — use WSL2; see [docs/WSL.md](docs/WSL.md).
+**macOS** (launchd), **Linux** (`systemd --user` or the [no-systemd installer path](https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/docs/LINUX-NO-SYSTEMD.md)), and **WSL2 on Windows** (systemd in your Ubuntu distro) are supported. **Native Windows** (PowerShell, Task Scheduler) is not — use WSL2; see [docs/WSL.md](https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/docs/WSL.md).
 
 **Q: Does it cost anything?**
 No. It's free and open source (MIT).
@@ -492,15 +493,15 @@ You're covered. The bridge restarts itself automatically, and it's careful not t
 - An action that was *mid-run* when the crash hit is reported as "didn't finish — status unknown" rather than quietly run again. So a half-finished `git push` won't accidentally fire twice.
 - An action that had already *finished* keeps its result.
 
-Developers: the full crash-recovery model (the journal, in-flight markers, and the `idempotency_key` option for safe retries) is documented in [`docs/architecture.md`](docs/architecture.md).
+Developers: the full crash-recovery model (the journal, in-flight markers, and the `idempotency_key` option for safe retries) is documented in [`docs/architecture.md`](https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/docs/architecture.md).
 
 ---
 
 ## Status & contributing
 
-**v0.5.0** — early, but solid. The core works, survives crashes and reboots without repeating risky actions, installs as a global skill (one command), streams live progress for long tasks, and runs on macOS, Linux, and WSL2. Built for myself, open-sourced because it's useful to others. See the [CHANGELOG](CHANGELOG.md) for the full history.
+**v0.5.0** — early, but solid. The core works, survives crashes and reboots without repeating risky actions, installs as a global skill (one command), streams live progress for long tasks, and runs on macOS, Linux, and WSL2. Built for myself, open-sourced because it's useful to others. See the [CHANGELOG](https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/CHANGELOG.md) for the full history.
 
-PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Browse [open issues](https://github.com/abhinaykrupa/cowork-to-code-bridge/issues) to find something to work on. Issues triaged best-effort. Not "production-grade" until tagged `v1.0.0`. macOS, Linux, and WSL2; native Windows not yet supported.
+PRs welcome — see [CONTRIBUTING.md](https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/CONTRIBUTING.md). Browse [open issues](https://github.com/abhinaykrupa/cowork-to-code-bridge/issues) to find something to work on. Issues triaged best-effort. Not "production-grade" until tagged `v1.0.0`. macOS, Linux, and WSL2; native Windows not yet supported.
 
 ### Contributors
 
@@ -518,4 +519,4 @@ New here? A [good first issue](https://github.com/abhinaykrupa/cowork-to-code-br
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Use it, fork it, ship it.
+MIT — see [LICENSE](https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/LICENSE). Use it, fork it, ship it.
