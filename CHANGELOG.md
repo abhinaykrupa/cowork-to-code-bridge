@@ -6,6 +6,11 @@ All notable changes to this project. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+- **Cowork Recipes doc (#38).** Rewrote [docs/RECIPES.md](docs/RECIPES.md) with
+  10 plain-English, copy-paste tasks (FastAPI health check, test-fix-commit,
+  disk cleanup with confirmation, release tagging, dev-server screenshot, and more).
+
 ## [0.5.1] - 2026-06-08
 
 First PyPI release. Ships everything below.
