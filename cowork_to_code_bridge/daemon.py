@@ -548,7 +548,8 @@ def run_one(cmd_path: Path, token_required: str | None,
         if k not in env:          # owner var wins; caller can only add new ones
             env[k] = str(v)
         elif k.upper() in ("CLAUDE_FLAGS", "BRIDGE_TOKEN", "BRIDGE_ROOT",
-                           "BRIDGE_ALLOW_UNAUTH", "BRIDGE_MAX_TIMEOUT"):
+                           "BRIDGE_ALLOW_UNAUTH", "BRIDGE_MAX_TIMEOUT",
+                           "BRIDGE_MAX_BUDGET_USD", "MAX_BUDGET_USD"):
             log(f"  ! blocked caller attempt to override protected env var: {k}")
         else:
             env[k] = str(v)       # non-security vars: caller wins (e.g. PYTHONPATH)
@@ -597,6 +598,42 @@ def run_one(cmd_path: Path, token_required: str | None,
         task_flags = _PERMISSION_FLAGS[requested_mode]
         env["CLAUDE_FLAGS"] = task_flags
         log(f"  ⚑ {cmd_id}: per-task CLAUDE_FLAGS={task_flags!r}")
+
+    # ─── per-task budget cap ──────────────────────────────────────────────────
+    # If the command carries a max_budget_usd field, cap it against the owner's
+    # BRIDGE_MAX_BUDGET_USD env var. If the owner ceiling is set but the caller
+    # didn't specify a budget, the ceiling is applied as the default so every
+    # task has a spend limit. MAX_BUDGET_USD is passed to run_claude.sh which
+    # forwards it as --max-budget-usd to the claude CLI.
+    requested_budget = cmd.get("max_budget_usd")
+    owner_ceiling_str = os.environ.get("BRIDGE_MAX_BUDGET_USD", "").strip()
+    owner_ceiling: float | None = None
+    if owner_ceiling_str:
+        try:
+            owner_ceiling = float(owner_ceiling_str)
+        except ValueError:
+            log(f"  ! BRIDGE_MAX_BUDGET_USD={owner_ceiling_str!r} is not a valid float — ignoring ceiling")
+
+    if requested_budget is not None:
+        try:
+            requested_budget = float(requested_budget)
+            if requested_budget <= 0:
+                raise ValueError("must be positive")
+        except (TypeError, ValueError) as exc:
+            write_result(cmd_id, {"exit_code": -1, "error": f"invalid max_budget_usd: {exc}"})
+            log(f"  ✗ {cmd_id}: invalid max_budget_usd {cmd.get('max_budget_usd')!r}")
+            cmd_path.rename(PROCESSED / cmd_path.name)
+            return
+        effective_budget: float | None = requested_budget
+        if owner_ceiling is not None and effective_budget > owner_ceiling:
+            log(f"  $ {cmd_id}: max_budget_usd {requested_budget} capped to owner ceiling {owner_ceiling}")
+            effective_budget = owner_ceiling
+    else:
+        effective_budget = owner_ceiling  # None if no ceiling configured
+
+    if effective_budget is not None:
+        env["MAX_BUDGET_USD"] = str(effective_budget)
+        log(f"  $ {cmd_id}: MAX_BUDGET_USD={effective_budget}")
 
     # ─── in-flight marker + journal: started ──────────────────────────────────
     # Marker is written BEFORE subprocess.run. If we crash between this point

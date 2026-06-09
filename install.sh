@@ -444,7 +444,14 @@ cd "$WORKDIR" || { log "cannot cd to $WORKDIR"; exit 1; }
 #   CLAUDE_FLAGS="--allowedTools Edit,Write,Read,Glob,Grep" # edits only, no shell
 # Unset = full agent. The prompt + output format are always appended.
 read -r -a EXTRA_FLAGS <<< "${CLAUDE_FLAGS:-}"
-exec "$CLAUDE_BIN" "${EXTRA_FLAGS[@]}" -p "$TASK" --output-format text
+# Budget cap: the daemon injects MAX_BUDGET_USD when a per-task or owner ceiling is active.
+# Passing --max-budget-usd stops the agent once the spend limit is reached so a
+# runaway task can't drain API credits. Omitting the flag means no ceiling (Claude default).
+BUDGET_FLAGS=()
+if [[ -n "${MAX_BUDGET_USD:-}" ]]; then
+  BUDGET_FLAGS=(--max-budget-usd "$MAX_BUDGET_USD")
+fi
+exec "$CLAUDE_BIN" "${EXTRA_FLAGS[@]}" "${BUDGET_FLAGS[@]}" -p "$TASK" --output-format text
 RUNCLAUDE
 chmod +x "$BRIDGE_ROOT/scripts/run_claude.sh"
 
@@ -762,6 +769,17 @@ print(r["exit_code"]); print(r["stdout"])
 \`\`\`
 Always pass a unique \`idempotency_key\` — Claude Code tasks have side effects, so a
 retry must not run twice.
+
+Pass \`max_budget_usd\` to cap API spend for this task:
+\`\`\`python
+r = call_remote("scripts/run_claude.sh",
+    args=["Refactor the auth module", "/path/to/repo"],
+    timeout=300, idempotency_key="refactor-auth-1",
+    max_budget_usd=2.00)   # stops the agent if it hits $2.00
+\`\`\`
+The owner can set \`BRIDGE_MAX_BUDGET_USD=5.00\` in launchd/systemd — a global
+ceiling that silently caps any per-task budget above it, protecting against
+runaway tasks from non-technical users who don't understand API costs.
 
 ## Step 2b — live status ticker (optional, for long tasks)
 

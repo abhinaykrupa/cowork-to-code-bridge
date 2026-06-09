@@ -258,3 +258,71 @@ def test_e2e_status_file_cleaned_up_after_run_one(bridge):
     assert not (d.PROGRESS / "1700_sta.status.json").exists(), ".status.json must be cleaned up"
     res = json.loads((d.RESULTS / "1700_sta.json").read_text())
     assert res["exit_code"] == 0
+
+
+# ── budget cap tests ──────────────────────────────────────────────────────────
+
+def _budget_bridge(tmp_path, monkeypatch, ceiling=None):
+    """Helper: set up a fresh bridge with an optional BRIDGE_MAX_BUDGET_USD ceiling."""
+    monkeypatch.setenv("BRIDGE_ROOT", str(tmp_path))
+    monkeypatch.setenv("BRIDGE_TOKEN", "test-token")
+    if ceiling is not None:
+        monkeypatch.setenv("BRIDGE_MAX_BUDGET_USD", str(ceiling))
+    import importlib
+    import cowork_to_code_bridge.daemon as d
+    importlib.reload(d)
+    for sub in (d.QUEUE, d.RESULTS, d.PROCESSED, d.INFLIGHT, d.PROGRESS, d.SCRIPTS_DIR):
+        sub.mkdir(parents=True, exist_ok=True)
+    # Script that prints the MAX_BUDGET_USD env var so tests can assert its value.
+    script = d.SCRIPTS_DIR / "print_budget.sh"
+    script.write_text('#!/bin/bash\necho "budget=${MAX_BUDGET_USD:-unset}"\n')
+    script.chmod(0o755)
+    return d
+
+
+def _enqueue_budget(d, cmd_id, **extra):
+    p = {"id": cmd_id, "script": "scripts/print_budget.sh", "args": [],
+         "token": "test-token", "timeout": 5, **extra}
+    f = d.QUEUE / f"{cmd_id}.json"
+    f.write_text(json.dumps(p))
+    return f
+
+
+def test_budget_ceiling_caps_above_limit_request(tmp_path, monkeypatch):
+    """max_budget_usd above the owner ceiling is silently capped to the ceiling."""
+    d = _budget_bridge(tmp_path, monkeypatch, ceiling=2.0)
+    f = _enqueue_budget(d, "1800_cap", max_budget_usd=10.0)
+    d.run_one(f, "test-token", {}, {})
+    res = json.loads((d.RESULTS / "1800_cap.json").read_text())
+    assert res["exit_code"] == 0
+    assert "budget=2.0" in res["stdout"], f"expected capped budget=2.0, got: {res['stdout']!r}"
+
+
+def test_budget_ceiling_applied_when_none_requested(tmp_path, monkeypatch):
+    """If caller omits max_budget_usd, the owner ceiling is still injected."""
+    d = _budget_bridge(tmp_path, monkeypatch, ceiling=2.0)
+    f = _enqueue_budget(d, "1801_def")  # no max_budget_usd
+    d.run_one(f, "test-token", {}, {})
+    res = json.loads((d.RESULTS / "1801_def.json").read_text())
+    assert res["exit_code"] == 0
+    assert "budget=2.0" in res["stdout"], f"expected owner ceiling=2.0, got: {res['stdout']!r}"
+
+
+def test_budget_below_ceiling_passes_through(tmp_path, monkeypatch):
+    """A requested budget below the ceiling is passed through unchanged."""
+    d = _budget_bridge(tmp_path, monkeypatch, ceiling=5.0)
+    f = _enqueue_budget(d, "1802_ok", max_budget_usd=1.5)
+    d.run_one(f, "test-token", {}, {})
+    res = json.loads((d.RESULTS / "1802_ok.json").read_text())
+    assert res["exit_code"] == 0
+    assert "budget=1.5" in res["stdout"], f"expected budget=1.5, got: {res['stdout']!r}"
+
+
+def test_no_budget_set_means_unset_env(tmp_path, monkeypatch):
+    """If neither caller nor owner sets a budget, MAX_BUDGET_USD is not injected."""
+    d = _budget_bridge(tmp_path, monkeypatch, ceiling=None)
+    f = _enqueue_budget(d, "1803_none")  # no max_budget_usd, no ceiling
+    d.run_one(f, "test-token", {}, {})
+    res = json.loads((d.RESULTS / "1803_none.json").read_text())
+    assert res["exit_code"] == 0
+    assert "budget=unset" in res["stdout"], f"expected budget=unset, got: {res['stdout']!r}"

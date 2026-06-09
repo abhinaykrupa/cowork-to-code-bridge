@@ -70,6 +70,22 @@ print(r["stdout"])   # what the local Claude Code agent did + reported
 can edit/commit/push, so if the connection drops and you retry, the key makes the
 daemon return the cached result instead of running the agent twice.
 
+**Pass `max_budget_usd` to cap API spend for a task:**
+
+```python
+r = call_remote(
+    "scripts/run_claude.sh",
+    args=["Refactor the auth module", "/path/to/repo"],
+    timeout=300, idempotency_key="refactor-auth-1",
+    max_budget_usd=2.00,   # agent stops if it hits $2.00 before finishing
+)
+```
+
+The owner can set `BRIDGE_MAX_BUDGET_USD=5.00` in their launchd/systemd env as a
+global ceiling — any per-task budget above the ceiling is silently capped. This
+protects against runaway tasks from non-technical users who don't understand API
+costs. If neither is set, no spend ceiling is enforced (Claude CLI default).
+
 For tasks that only need read access, request a tighter permission scope:
 
 ```python

@@ -77,6 +77,7 @@ def call_remote(
     idempotency_key: str | None = None,
     plan: str | None = None,
     permission_mode: str | None = None,
+    max_budget_usd: float | None = None,
 ) -> dict[str, Any]:
     """Submit a script invocation to the Mac daemon and wait for its result.
 
@@ -143,6 +144,8 @@ def call_remote(
         payload["plan"] = plan
     if permission_mode is not None:
         payload["permission_mode"] = permission_mode
+    if max_budget_usd is not None:
+        payload["max_budget_usd"] = max_budget_usd
 
     token = _load_token(root)
     if token:
@@ -186,6 +189,7 @@ def call_remote_streaming(
     on_status=None,
     plan: str | None = None,
     permission_mode: str | None = None,
+    max_budget_usd: float | None = None,
 ) -> dict[str, Any]:
     """Like call_remote, but streams live output while the task runs.
 
@@ -228,6 +232,8 @@ def call_remote_streaming(
         payload["plan"] = plan
     if permission_mode is not None:
         payload["permission_mode"] = permission_mode
+    if max_budget_usd is not None:
+        payload["max_budget_usd"] = max_budget_usd
     token = _load_token(root)
     if token:
         payload["token"] = token
