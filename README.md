@@ -1,6 +1,8 @@
 # cowork-to-code-bridge
 
 [![CI](https://github.com/abhinaykrupa/cowork-to-code-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/abhinaykrupa/cowork-to-code-bridge/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/cowork-to-code-bridge)](https://pypi.org/project/cowork-to-code-bridge/)
+[![PyPI downloads](https://img.shields.io/pypi/dm/cowork-to-code-bridge)](https://pypi.org/project/cowork-to-code-bridge/)
 [![Stars](https://img.shields.io/github/stars/abhinaykrupa/cowork-to-code-bridge?style=social)](https://github.com/abhinaykrupa/cowork-to-code-bridge/stargazers)
 [![Release](https://img.shields.io/github/v/release/abhinaykrupa/cowork-to-code-bridge?display_name=tag)](https://github.com/abhinaykrupa/cowork-to-code-bridge/releases)
 [![Downloads](https://img.shields.io/github/downloads/abhinaykrupa/cowork-to-code-bridge/total?logo=github)](https://github.com/abhinaykrupa/cowork-to-code-bridge/releases)
@@ -47,6 +49,25 @@ curl -fsSL https://raw.githubusercontent.com/abhinaykrupa/cowork-to-code-bridge/
 ```
 
 Wait ~30 seconds. It installs a small background helper (auto-restarts, reboot-safe) and a Claude skill. When it finishes it prints a **connect line with your real path filled in** — copy that exact line, or use the template below.
+
+Once the package is on PyPI, the installer prefers `pip install` from there (faster than the GitHub fallback).
+
+<details>
+<summary>Developers / pip (package only — not the full bridge setup)</summary>
+
+```bash
+pip install cowork-to-code-bridge
+cowork-to-code-bridge-selfcheck
+```
+
+This installs the Python package and console scripts (`cowork-to-code-bridge-daemon`,
+`-uninstall`, `-selfcheck`). It does **not** set up launchd/systemd, the Cowork
+skill, whitelisted scripts, or a bridge token. For the full bridge, use the
+`curl | bash` one-liner above (or Homebrew on macOS).
+
+Maintainers publishing releases: see **[docs/RELEASING.md](docs/RELEASING.md)**.
+
+</details>
 
 **Step 2 — in Cowork (once per chat).** Paste the connect line into any Claude Cowork chat (replace the path with the one the installer printed):
 

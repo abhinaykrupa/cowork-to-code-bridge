@@ -34,6 +34,7 @@ dev = [
 Homepage = "https://github.com/abhinaykrupa/cowork-to-code-bridge"
 Repository = "https://github.com/abhinaykrupa/cowork-to-code-bridge"
 Issues = "https://github.com/abhinaykrupa/cowork-to-code-bridge/issues"
+PyPI = "https://pypi.org/project/cowork-to-code-bridge/"
 
 [project.scripts]
 cowork-to-code-bridge-daemon = "cowork_to_code_bridge.daemon:main"

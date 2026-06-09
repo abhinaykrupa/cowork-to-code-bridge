@@ -6,6 +6,12 @@ All notable changes to this project. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+- **PyPI install path (#36).** README PyPI version + downloads badges, developer
+  `pip install` docs, `install.sh` version floor `>=0.5.1`, and PyPI URL in
+  `pyproject.toml`. Maintainer: follow [docs/RELEASING.md](docs/RELEASING.md) to
+  publish the first release.
+
 ## [0.5.1] - 2026-06-08
 
 First PyPI release. Ships everything below.

@@ -28,6 +28,7 @@ REPO="abhinaykrupa/cowork-to-code-bridge"
 BRIDGE_ROOT="$HOME/.cowork-to-code-bridge"
 PLIST="$HOME/Library/LaunchAgents/dev.cowork-to-code-bridge.daemon.plist"
 PACKAGE="cowork-to-code-bridge"
+PACKAGE_SPEC="cowork-to-code-bridge>=0.5.1"
 DAEMON_LOG="$BRIDGE_ROOT/daemon.log"
 DAEMON_ERR="$BRIDGE_ROOT/daemon.err"
 
@@ -298,7 +299,7 @@ pip_install_user() {
   return $rc
 }
 
-if pip_install_user "$PACKAGE" 2>/dev/null; then
+if pip_install_user "$PACKAGE_SPEC" 2>/dev/null; then
   c_green "  ✓ installed from PyPI"
 else
   c_yellow "  PyPI install failed (package may not be published yet) — falling back to GitHub"
