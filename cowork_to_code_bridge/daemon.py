@@ -533,19 +533,10 @@ def run_one(cmd_path: Path, token_required: str | None,
             env[k] = str(v)
         elif k.upper() in ("CLAUDE_FLAGS", "BRIDGE_TOKEN", "BRIDGE_ROOT",
                            "BRIDGE_ALLOW_UNAUTH", "BRIDGE_MAX_TIMEOUT",
-                           "BRIDGE_MAX_BUDGET_USD", "BRIDGE_CMD_ID"):
+                           "BRIDGE_MAX_BUDGET_USD"):
             log(f"  ! blocked caller attempt to override protected env var: {k}")
         else:
             env[k] = str(v)       # non-security vars: caller wins (e.g. PYTHONPATH)
-
-    # ── Task correlation id injection (issue #72) ─────────────────────────────
-    # Inject BRIDGE_CMD_ID so a script that calls request_cowork.sh mid-task can
-    # stamp the request with its parent task id. request_cowork.sh reads this and
-    # writes it as the "parent" field of the request JSON, letting the Cowork
-    # client's interactive poll loop correlate a mid-task question back to the
-    # running task. Set AFTER the caller-env merge (and listed in the protected
-    # vars above) so a caller with the bridge token can't spoof another task's id.
-    env["BRIDGE_CMD_ID"] = cmd_id
 
     # ── Budget cap injection ──────────────────────────────────────────────────
     # Inject MAX_BUDGET_USD from the command payload into the script environment
@@ -566,76 +557,6 @@ def run_one(cmd_path: Path, token_required: str | None,
     if _MAX_BUDGET_USD_STR:
         # Always forward the owner ceiling so run_claude.sh can enforce it.
         env["BRIDGE_MAX_BUDGET_USD"] = _MAX_BUDGET_USD_STR
-
-    # ── Model tier injection ──────────────────────────────────────────────────
-    # Inject CLAUDE_MODEL_TIER from the command payload so run_claude.sh can map
-    # it to a concrete `--model` ID. The tier is validated against the router's
-    # canonical set; an unknown tier is ignored (logged) so a bad payload falls
-    # back to the CLI default rather than crashing the daemon or dispatching to a
-    # garbage model name. An owner-set CLAUDE_MODEL_TIER in the daemon env always
-    # wins (same precedence as CLAUDE_FLAGS) — the caller can't override it.
-    tier_raw = cmd.get("model_tier")
-    if tier_raw is not None:
-        if "CLAUDE_MODEL_TIER" in env:
-            log("  ! ignoring caller model_tier: owner CLAUDE_MODEL_TIER is set")
-        else:
-            tier_norm = str(tier_raw).strip().lower()
-            if tier_norm in {"haiku", "sonnet", "opus", "fable"}:
-                env["CLAUDE_MODEL_TIER"] = tier_norm
-            else:
-                log(f"  ! ignoring invalid model_tier={tier_raw!r}")
-
-    # ── Effort injection (issue #33) ──────────────────────────────────────────
-    # Inject CLAUDE_EFFORT from the command payload so run_claude.sh can pass the
-    # claude CLI's `--effort <low|medium|high|xhigh|max>` flag. Parallel to model
-    # tier: the effort is validated against the CLI's fixed set; an unknown value
-    # is ignored (logged) so a bad payload falls back to the CLI default rather
-    # than dispatching a garbage flag. An owner-set CLAUDE_EFFORT in the daemon
-    # env always wins (same precedence as model tier and CLAUDE_FLAGS) — the
-    # caller can't override it.
-    effort_raw = cmd.get("effort")
-    if effort_raw is not None:
-        if "CLAUDE_EFFORT" in env:
-            log("  ! ignoring caller effort: owner CLAUDE_EFFORT is set")
-        else:
-            effort_norm = str(effort_raw).strip().lower()
-            if effort_norm in {"low", "medium", "high", "xhigh", "max"}:
-                env["CLAUDE_EFFORT"] = effort_norm
-            else:
-                log(f"  ! ignoring invalid effort={effort_raw!r}")
-
-    # ── Per-task permission scope injection (issue #47) ───────────────────────
-    # Inject CLAUDE_FLAGS from a caller-supplied permission_scope so a single task
-    # can be sandboxed (plan/readonly/edit) without the owner having to set a
-    # global CLAUDE_FLAGS. The caller picks from a fixed safe allowlist of named
-    # scopes (NOT arbitrary flags) — the scope is resolved to a vetted flag set by
-    # the router, so the bridge token can never be used to widen trust to full
-    # shell. An owner-set CLAUDE_FLAGS in the daemon env always wins (same
-    # precedence as model tier and budget); an unknown scope is ignored (logged).
-    scope_raw = cmd.get("permission_scope")
-    if scope_raw is not None:
-        if "CLAUDE_FLAGS" in env:
-            log("  ! ignoring caller permission_scope: owner CLAUDE_FLAGS is set")
-        else:
-            scope_norm = str(scope_raw).strip().lower()
-            # Canonical scope → CLAUDE_FLAGS. Kept in sync with model_router.py's
-            # SCOPE_TO_FLAGS and run_claude.sh's scope_to_flags(); inlined here so
-            # the daemon stays import-free for dispatch (same style as model_tier).
-            # 'full' maps to no flags — leave CLAUDE_FLAGS unset so the CLI default
-            # applies rather than widening trust.
-            scope_flags = {
-                "plan": "--permission-mode plan",
-                "readonly": "--allowedTools Read,Glob,Grep",
-                "edit": "--allowedTools Read,Glob,Grep,Edit,Write",
-                "full": "",
-            }
-            if scope_norm in scope_flags:
-                flags = scope_flags[scope_norm]
-                if flags:
-                    env["CLAUDE_FLAGS"] = flags
-                    log(f"  permission scope {scope_norm!r} → CLAUDE_FLAGS={flags}")
-            else:
-                log(f"  ! ignoring invalid permission_scope={scope_raw!r}")
 
     # ─── in-flight marker + journal: started ──────────────────────────────────
     # Marker is written BEFORE subprocess.run. If we crash between this point

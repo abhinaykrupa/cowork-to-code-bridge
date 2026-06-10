@@ -70,40 +70,27 @@ print(r["stdout"])   # what the local Claude Code agent did + reported
 can edit/commit/push, so if the connection drops and you retry, the key makes the
 daemon return the cached result instead of running the agent twice.
 
-**Pass `max_budget_usd` to cap API spend for a task:**
+### Per-task cost cap (`max_budget_usd`)
+
+Long Claude Code tasks can drift. Pass `max_budget_usd` to set a hard spend
+ceiling — the agent stops and reports what it finished when the budget is hit:
 
 ```python
 r = call_remote(
     "scripts/run_claude.sh",
     args=["Refactor the auth module", "/path/to/repo"],
-    timeout=300, idempotency_key="refactor-auth-1",
-    max_budget_usd=2.00,   # agent stops if it hits $2.00 before finishing
+    timeout=600,
+    idempotency_key="refactor-auth-1",
+    max_budget_usd=2.00,   # stop when this is spent, no matter what
 )
 ```
 
-The owner can set `BRIDGE_MAX_BUDGET_USD=5.00` in their launchd/systemd env as a
-global ceiling — any per-task budget above the ceiling is silently capped. This
-protects against runaway tasks from non-technical users who don't understand API
-costs. If neither is set, no spend ceiling is enforced (Claude CLI default).
-
-For tasks that only need read access, request a tighter permission scope:
-
-```python
-r = call_remote(
-    "scripts/run_claude.sh",
-    args=["Summarise the last 10 commits", "/Users/<them>/projects/app"],
-    timeout=120, idempotency_key="summarise-1",
-    permission_scope="readonly",   # Read/Glob/Grep only — no edits, no shell
-)
-```
-
-Valid `permission_scope` values (least → most permissive): `"plan"` (read +
-reason only), `"readonly"` (Read/Glob/Grep), `"edit"` (file edits, no shell),
-`"full"` (no extra restriction). The daemon resolves the scope to a vetted
-`CLAUDE_FLAGS` set from a **fixed allowlist** — a caller can never pass arbitrary
-flags, so the bridge token can't widen trust to full shell. An owner-set
-`CLAUDE_FLAGS` (in the launchd/systemd unit) always wins; omit `permission_scope`
-to use the owner's global flags unchanged.
+The Mac owner can also set `BRIDGE_MAX_BUDGET_USD=5.00` in their launchd/systemd
+env as a **global ceiling** — any per-task budget above that is silently capped.
+If the owner sets 5.00 and Cowork sends 10.00, the effective limit is $5. This
+makes the bridge safe to share: a runaway "rewrite everything" task can't cost
+more than whatever the owner decided.  `max_budget_usd` works with both
+`call_remote` and `call_remote_streaming`.
 
 ### Long tasks — stream live progress (don't wait blind)
 

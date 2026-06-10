@@ -225,6 +225,91 @@ def test_e2e_status_file_last_line_captured(bridge, tmp_path):
     assert s["last_line"] == "second line"
 
 
+# ─── max_budget_usd tests ─────────────────────────────────────────────────────
+
+def _budget_bridge(tmp_path, monkeypatch, owner_ceiling=None):
+    """Return a bridge fixture with an optional BRIDGE_MAX_BUDGET_USD ceiling."""
+    monkeypatch.setenv("BRIDGE_ROOT", str(tmp_path))
+    monkeypatch.setenv("BRIDGE_TOKEN", "test-token")
+    if owner_ceiling is not None:
+        monkeypatch.setenv("BRIDGE_MAX_BUDGET_USD", str(owner_ceiling))
+    else:
+        monkeypatch.delenv("BRIDGE_MAX_BUDGET_USD", raising=False)
+    import cowork_to_code_bridge.daemon as d
+    importlib.reload(d)
+    for sub in (d.QUEUE, d.RESULTS, d.PROCESSED, d.INFLIGHT, d.PROGRESS, d.SCRIPTS_DIR):
+        sub.mkdir(parents=True, exist_ok=True)
+    # A script that dumps its environment so we can inspect MAX_BUDGET_USD.
+    script = d.SCRIPTS_DIR / "dump_env.sh"
+    script.write_text("#!/bin/bash\nenv\n")
+    script.chmod(0o755)
+    return d
+
+
+def test_budget_caller_value_forwarded_to_env(tmp_path, monkeypatch):
+    """max_budget_usd in the command payload is forwarded as MAX_BUDGET_USD env var."""
+    d = _budget_bridge(tmp_path, monkeypatch)
+    p = {"id": "b1", "script": "scripts/dump_env.sh", "args": [],
+         "token": "test-token", "timeout": 5, "max_budget_usd": 3.5}
+    (d.QUEUE / "b1.json").write_text(json.dumps(p))
+    d.run_one(d.QUEUE / "b1.json", "test-token", {}, {})
+    res = json.loads((d.RESULTS / "b1.json").read_text())
+    assert res["exit_code"] == 0
+    assert "MAX_BUDGET_USD=3.5000" in res["stdout"]
+
+
+def test_budget_owner_ceiling_forwarded_to_env(tmp_path, monkeypatch):
+    """BRIDGE_MAX_BUDGET_USD owner ceiling is forwarded as BRIDGE_MAX_BUDGET_USD env var."""
+    d = _budget_bridge(tmp_path, monkeypatch, owner_ceiling=5.0)
+    p = {"id": "b2", "script": "scripts/dump_env.sh", "args": [],
+         "token": "test-token", "timeout": 5}
+    (d.QUEUE / "b2.json").write_text(json.dumps(p))
+    d.run_one(d.QUEUE / "b2.json", "test-token", {}, {})
+    res = json.loads((d.RESULTS / "b2.json").read_text())
+    assert res["exit_code"] == 0
+    assert "BRIDGE_MAX_BUDGET_USD=5.0" in res["stdout"]
+
+
+def test_budget_invalid_value_ignored(tmp_path, monkeypatch):
+    """A non-numeric max_budget_usd is silently dropped; the script still runs."""
+    d = _budget_bridge(tmp_path, monkeypatch)
+    p = {"id": "b3", "script": "scripts/dump_env.sh", "args": [],
+         "token": "test-token", "timeout": 5, "max_budget_usd": "bad"}
+    (d.QUEUE / "b3.json").write_text(json.dumps(p))
+    d.run_one(d.QUEUE / "b3.json", "test-token", {}, {})
+    res = json.loads((d.RESULTS / "b3.json").read_text())
+    assert res["exit_code"] == 0
+    assert "MAX_BUDGET_USD" not in res["stdout"]
+
+
+def test_budget_negative_value_ignored(tmp_path, monkeypatch):
+    """Negative max_budget_usd is silently dropped."""
+    d = _budget_bridge(tmp_path, monkeypatch)
+    p = {"id": "b4", "script": "scripts/dump_env.sh", "args": [],
+         "token": "test-token", "timeout": 5, "max_budget_usd": -1.0}
+    (d.QUEUE / "b4.json").write_text(json.dumps(p))
+    d.run_one(d.QUEUE / "b4.json", "test-token", {}, {})
+    res = json.loads((d.RESULTS / "b4.json").read_text())
+    assert res["exit_code"] == 0
+    assert "MAX_BUDGET_USD" not in res["stdout"]
+
+
+def test_budget_caller_cannot_override_owner_ceiling(tmp_path, monkeypatch):
+    """Caller cannot override BRIDGE_MAX_BUDGET_USD — it is in the protected list."""
+    d = _budget_bridge(tmp_path, monkeypatch, owner_ceiling=5.0)
+    # Caller tries to set BRIDGE_MAX_BUDGET_USD via the env dict (not max_budget_usd).
+    p = {"id": "b5", "script": "scripts/dump_env.sh", "args": [],
+         "token": "test-token", "timeout": 5,
+         "env": {"BRIDGE_MAX_BUDGET_USD": "999.0"}}
+    (d.QUEUE / "b5.json").write_text(json.dumps(p))
+    d.run_one(d.QUEUE / "b5.json", "test-token", {}, {})
+    res = json.loads((d.RESULTS / "b5.json").read_text())
+    assert res["exit_code"] == 0
+    # The owner's value (5.0) must not have been overwritten to 999.
+    assert "BRIDGE_MAX_BUDGET_USD=999" not in res["stdout"]
+    assert "BRIDGE_MAX_BUDGET_USD=5.0" in res["stdout"]
+
+
 def test_e2e_oversized_command_rejected(bridge):
     """A command file larger than MAX_CMD_BYTES is rejected, not slurped."""
     d, _ = bridge

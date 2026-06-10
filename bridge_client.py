@@ -269,9 +269,6 @@ def call_remote(
     idempotency_key: str | None = None,
     plan: str | None = None,
     max_budget_usd: float | None = None,
-    permission_scope: str | None = None,
-    model_tier: str | None = None,
-    effort: str | None = None,
 ) -> dict[str, Any]:
     """Submit a script invocation to the Mac daemon and wait for its result.
 
@@ -311,12 +308,6 @@ def call_remote(
         payload["plan"] = plan
     if max_budget_usd is not None:
         payload["max_budget_usd"] = float(max_budget_usd)
-    if permission_scope is not None:
-        payload["permission_scope"] = str(permission_scope)
-    if model_tier is not None:
-        payload["model_tier"] = str(model_tier).strip().lower()
-    if effort is not None:
-        payload["effort"] = str(effort).strip().lower()
 
     token = _load_token(root)
     if token:
@@ -349,7 +340,7 @@ def call_remote(
 def call_remote_streaming(script, args=None, timeout=600, poll_interval=1.0,
                           cwd=None, env=None, bridge_root=None,
                           idempotency_key=None, on_progress=None, on_status=None,
-                          plan=None) -> dict[str, Any]:
+                          plan=None, max_budget_usd=None) -> dict[str, Any]:
     """Like call_remote, but streams live output while the task runs.
 
     The daemon tees the script's output to progress/<id>.log; this polls it and
@@ -378,9 +369,6 @@ def call_remote_streaming(script, args=None, timeout=600, poll_interval=1.0,
     if idempotency_key: payload["idempotency_key"] = idempotency_key
     if plan is not None: payload["plan"] = plan
     if max_budget_usd is not None: payload["max_budget_usd"] = float(max_budget_usd)
-    if permission_scope is not None: payload["permission_scope"] = str(permission_scope)
-    if model_tier is not None: payload["model_tier"] = str(model_tier).strip().lower()
-    if effort is not None: payload["effort"] = str(effort).strip().lower()
     token = _load_token(root)
     if token: payload["token"] = token
     cmd_file = queue / f"{cmd_id}.json"

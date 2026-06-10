@@ -492,50 +492,7 @@ elif [[ -n "$OWNER_CEILING" ]]; then
   BUDGET_FLAGS=(--max-budget-usd "$OWNER_CEILING")
 fi
 
-# ── Model tier → --model ────────────────────────────────────────────────────
-# CLAUDE_MODEL_TIER: routing tier injected by the daemon (haiku|sonnet|opus|fable).
-# Map it to the concrete model ID the claude CLI expects. Keep in sync with
-# cowork_to_code_bridge/model_router.py's TIER_TO_MODEL_ID (the canonical source).
-# An unset/unknown tier means: don't pass --model, let the CLI pick its default.
-MODEL_FLAGS=()
-tier_to_model_id() {
-  case "$1" in
-    haiku)  echo "claude-haiku-4-5-20251001" ;;
-    sonnet) echo "claude-sonnet-4-6" ;;
-    opus)   echo "claude-opus-4-8" ;;
-    fable)  echo "claude-fable-5" ;;
-    *)      echo "" ;;
-  esac
-}
-if [[ -n "${CLAUDE_MODEL_TIER:-}" ]]; then
-  MODEL_ID="$(tier_to_model_id "$(echo "$CLAUDE_MODEL_TIER" | tr '[:upper:]' '[:lower:]')")"
-  if [[ -n "$MODEL_ID" ]]; then
-    log "model tier '$CLAUDE_MODEL_TIER' → --model $MODEL_ID"
-    MODEL_FLAGS=(--model "$MODEL_ID")
-  else
-    log "unknown CLAUDE_MODEL_TIER='$CLAUDE_MODEL_TIER' — using CLI default model"
-  fi
-fi
-
-# ── Effort → --effort ───────────────────────────────────────────────────────
-# CLAUDE_EFFORT: reasoning-effort tier injected by the daemon (issue #33). The
-# claude CLI accepts --effort <low|medium|high|xhigh|max>; a lower effort is
-# cheaper/faster for trivial tasks, higher for hard multi-file work. An unset or
-# unknown value means: don't pass --effort, let the CLI pick its default. Kept in
-# sync with the daemon's CLAUDE_EFFORT validation set.
-EFFORT_FLAGS=()
-if [[ -n "${CLAUDE_EFFORT:-}" ]]; then
-  EFFORT_LEVEL="$(echo "$CLAUDE_EFFORT" | tr '[:upper:]' '[:lower:]')"
-  case "$EFFORT_LEVEL" in
-    low|medium|high|xhigh|max)
-      log "effort '$CLAUDE_EFFORT' → --effort $EFFORT_LEVEL"
-      EFFORT_FLAGS=(--effort "$EFFORT_LEVEL") ;;
-    *)
-      log "unknown CLAUDE_EFFORT='$CLAUDE_EFFORT' — using CLI default effort" ;;
-  esac
-fi
-
-exec "$CLAUDE_BIN" "${EXTRA_FLAGS[@]}" "${MODEL_FLAGS[@]}" "${EFFORT_FLAGS[@]}" "${BUDGET_FLAGS[@]}" -p "$TASK" --output-format text
+exec "$CLAUDE_BIN" "${EXTRA_FLAGS[@]}" "${BUDGET_FLAGS[@]}" -p "$TASK" --output-format text
 RUNCLAUDE
 chmod +x "$BRIDGE_ROOT/scripts/run_claude.sh"
 
@@ -1690,40 +1647,7 @@ Pass \`max_budget_usd=2.00\` to stop the agent when that amount is spent.
 The owner can set \`BRIDGE_MAX_BUDGET_USD\` as a global ceiling that can never
 be exceeded regardless of what Cowork sends (effective = min(caller, owner)).
 
-## Step 3 — streaming + interactive tasks
-
-For long tasks use \`call_remote_streaming\`. Add \`interactive=True\` to handle
-mid-task questions from the script (approval gates, config requests, decision points).
-
-\`\`\`python
-from bridge_client import call_remote_streaming, reply_to_machine, resume_remote
-
-r = call_remote_streaming("scripts/run_claude.sh",
-    args=["Deploy to prod", "/path/to/repo"],
-    timeout=900, interactive=True)
-
-while r.get("state") == "awaiting_reply":
-    # Script paused and asked a question — show it to the user, get answer.
-    answer = input(f"Script asks: {r['question']} > ")
-    reply_to_machine(r["request_id"], answer, bridge_root=r["_bridge_root"])
-    r = resume_remote(r["cmd_id"], r["_deadline"], bridge_root=r["_bridge_root"])
-
-print(r["exit_code"], r["stdout"])
-\`\`\`
-
-Return shape when a question arrives:
-\`\`\`json
-{"state": "awaiting_reply", "cmd_id": "...", "request_id": "...",
- "question": "Deploy to production?", "from": "claude-code",
- "_deadline": 1234567890.0, "_bridge_root": "/Users/.../.cowork-to-code-bridge"}
-\`\`\`
-
-On the script side, \`request_cowork.sh "question" --wait 120\` blocks until Cowork
-replies or times out. Timeout exits 1 (not 0) — scripts can detect and handle it.
-Set a generous \`timeout=\` for interactive tasks; the clock doesn't pause while
-waiting for an answer.
-
-## Step 4 — quick system checks (no agent)
+## Step 3 — quick system checks (no agent)
 \`call_remote("scripts/mac_health.sh")\` · \`mac_ram.sh\` · \`mac_disk.sh\` · \`mac_top.sh\` · \`mac_network.sh\` · \`port_check.sh\` · \`docker_ps.sh\` · \`docker_logs.sh\` · \`pkg_outdated.sh\` · \`git_status.sh <path>\`
 
 ## Results
