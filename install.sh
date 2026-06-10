@@ -1208,7 +1208,14 @@ r = call_remote("scripts/run_claude.sh",
 print(r["exit_code"]); print(r["stdout"])
 \`\`\`
 Always pass a unique idempotency_key (tasks have side effects). For long builds,
-use call_remote_streaming(..., on_progress=cb).
+use call_remote_streaming(..., on_progress=cb). For a live spinner/ticker:
+\`\`\`python
+def on_status(s):
+    sp = "⣾⣽⣻⢿⡿⣟⣯⣷"
+    print(f"\r  {sp[s['elapsed_s']%8]} {s['last_line'][:60]}… ({s['elapsed_s']}s)", end="", flush=True)
+call_remote_streaming("scripts/run_claude.sh", args=[...], timeout=900, on_status=on_status)
+\`\`\`
+Status dict keys: elapsed_s (int), last_line (str), state ("running"|"done"|"error").
 
 ## Quick checks (no agent)
 scripts/mac_health.sh · mac_ram.sh · mac_disk.sh · mac_top.sh · mac_network.sh · port_check.sh <port> · docker_ps.sh · docker_logs.sh <container> · pkg_outdated.sh · git_status.sh <path>

@@ -135,6 +135,96 @@ def test_e2e_progress_file_written_during_run_and_cleared_after(bridge):
     assert not (d.PROGRESS / "1400_str.log").exists()
 
 
+def test_e2e_status_file_cleaned_up_after_run(bridge):
+    """The daemon removes the .status.json alongside the .log after the result
+    is written. Clients polling the status file should see it disappear once
+    the final result JSON is available."""
+    d, _ = bridge
+    terminal, cache = {}, {}
+    f = _enqueue(d, "1500_sta")
+    d.run_one(f, "test-token", terminal, cache)
+
+    assert not (d.PROGRESS / "1500_sta.status.json").exists(), (
+        ".status.json must be removed alongside .log after run completes"
+    )
+    assert not (d.PROGRESS / "1500_sta.log").exists()
+
+
+def test_e2e_status_file_has_correct_terminal_state_for_success(bridge, tmp_path):
+    """The _write_status_atomic helper writes state='done' and exit_code=0 on
+    success before the file is cleaned up by run_one.  We verify by patching
+    the cleanup so we can read the file."""
+    import importlib
+    d, _ = bridge
+
+    # Intercept unlink so the status file survives for inspection.
+    status_path: list = []
+
+    original_run_one = d.run_one
+
+    def patched_run_one(cmd_path, token, terminal, idem_cache):
+        # Call the real implementation — cleanup happens inside.
+        original_run_one(cmd_path, token, terminal, idem_cache)
+
+    # Instead, test _run_streaming directly with a short script.
+    import tempfile, pathlib
+    script = tmp_path / "ok.sh"
+    script.write_text("#!/bin/bash\necho hello\n")
+    script.chmod(0o755)
+    progress_file = tmp_path / "progress" / "test.log"
+    progress_file.parent.mkdir(parents=True, exist_ok=True)
+    result = d._run_streaming(
+        ["bash", str(script)], str(tmp_path), {}, timeout=10,
+        progress_file=progress_file,
+    )
+    status_file = tmp_path / "progress" / "test.status.json"
+    # _run_streaming writes the terminal status BEFORE returning.
+    assert status_file.exists(), ".status.json must be written by _run_streaming before return"
+    s = json.loads(status_file.read_text())
+    assert s["state"] == "done"
+    assert s["exit_code"] == 0
+    assert isinstance(s["elapsed_s"], int)
+    assert "last_line" in s
+
+
+def test_e2e_status_file_state_error_on_nonzero_exit(bridge, tmp_path):
+    """state='error' when the script exits non-zero."""
+    import importlib
+    d, _ = bridge
+    script = tmp_path / "fail.sh"
+    script.write_text("#!/bin/bash\necho oops\nexit 42\n")
+    script.chmod(0o755)
+    progress_file = tmp_path / "progress" / "fail.log"
+    progress_file.parent.mkdir(parents=True, exist_ok=True)
+    d._run_streaming(
+        ["bash", str(script)], str(tmp_path), {}, timeout=10,
+        progress_file=progress_file,
+    )
+    status_file = tmp_path / "progress" / "fail.status.json"
+    assert status_file.exists()
+    s = json.loads(status_file.read_text())
+    assert s["state"] == "error"
+    assert s["exit_code"] == 42
+
+
+def test_e2e_status_file_last_line_captured(bridge, tmp_path):
+    """last_line in the status file reflects the most recent non-empty output."""
+    import importlib
+    d, _ = bridge
+    script = tmp_path / "lines.sh"
+    script.write_text("#!/bin/bash\necho first line\necho second line\n")
+    script.chmod(0o755)
+    progress_file = tmp_path / "progress" / "lines.log"
+    progress_file.parent.mkdir(parents=True, exist_ok=True)
+    d._run_streaming(
+        ["bash", str(script)], str(tmp_path), {}, timeout=10,
+        progress_file=progress_file,
+    )
+    status_file = tmp_path / "progress" / "lines.status.json"
+    s = json.loads(status_file.read_text())
+    assert s["last_line"] == "second line"
+
+
 def test_e2e_oversized_command_rejected(bridge):
     """A command file larger than MAX_CMD_BYTES is rejected, not slurped."""
     d, _ = bridge

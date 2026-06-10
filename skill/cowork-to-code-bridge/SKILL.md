@@ -90,6 +90,30 @@ Tell the user what's happening as chunks arrive (e.g. "installing deps…",
 "running tests…") rather than leaving them waiting. Same final result + same
 idempotency guarantees as `call_remote`.
 
+### Live status ticker (spinner + elapsed time)
+
+The daemon writes `progress/<id>.status.json` every ~2 s with `{"elapsed_s", "last_line", "state"}`.
+Pass `on_status` to get a compact ticker that doesn't flood the log:
+
+```python
+def on_status(s):
+    SPINNER = "⣾⣽⣻⢿⡿⣟⣯⣷"
+    tick = s["elapsed_s"] % len(SPINNER)
+    print(f"\r  {SPINNER[tick]} {s['last_line'][:60]}… ({s['elapsed_s']}s)",
+          end="", flush=True)
+
+r = call_remote_streaming(
+    "scripts/run_claude.sh",
+    args=["Build the app", "/Users/<them>/projects/app"],
+    timeout=900, on_status=on_status,
+)
+print()   # newline after the spinner
+print(r["exit_code"])
+```
+
+`on_status` and `on_progress` can be combined — `on_status` fires ~every 2 s
+for the ticker while `on_progress` captures the full raw log.
+
 ## Step 3 — quick fixed actions (no agent needed)
 
 For simple, fast system queries, call a ready-made script directly:

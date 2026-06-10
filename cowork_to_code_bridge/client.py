@@ -174,6 +174,7 @@ def call_remote_streaming(
     bridge_root: Path | str | None = None,
     idempotency_key: str | None = None,
     on_progress=None,
+    on_status=None,
     plan: str | None = None,
 ) -> dict[str, Any]:
     """Like call_remote, but streams live output while the task runs.
@@ -186,6 +187,15 @@ def call_remote_streaming(
 
     on_progress: optional callable taking the newly-appended text (str). If
     None, new output is printed to stdout as it arrives.
+
+    on_status: optional callable receiving status dicts written by the daemon
+    every ~2 s to progress/<id>.status.json.  Each dict has:
+        elapsed_s  (int)  seconds since the script started
+        last_line  (str)  most recent non-empty output line
+        state      (str)  "running" | "done" | "error"
+        exit_code  (int)  present only when state != "running"
+    Called only when the file changes (mtime-gated), so it fires at most once
+    per daemon write cycle (~2 s).  Useful for a spinner / elapsed-time ticker.
     """
     root = Path(bridge_root) if bridge_root else _resolve_bridge_root()
     queue = root / "queue"
@@ -221,8 +231,10 @@ def call_remote_streaming(
 
     result_file = results / f"{cmd_id}.json"
     progress_file = progress / f"{cmd_id}.log"
+    status_file = progress / f"{cmd_id}.status.json"
     emit = on_progress or (lambda chunk: print(chunk, end="", flush=True))
     seen = 0
+    last_status_mtime: float = 0.0
     deadline = time.time() + timeout + 5
     while time.time() < deadline:
         # Stream any new progress output.
@@ -234,6 +246,15 @@ def call_remote_streaming(
                     seen = len(data)
         except OSError:
             pass
+        # Fire on_status whenever the daemon updates the status file.
+        if on_status is not None:
+            try:
+                mtime = status_file.stat().st_mtime
+                if mtime > last_status_mtime:
+                    last_status_mtime = mtime
+                    on_status(json.loads(status_file.read_text()))
+            except (OSError, json.JSONDecodeError):
+                pass
         # Check for the final result.
         if result_file.exists():
             try:
