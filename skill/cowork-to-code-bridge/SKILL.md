@@ -171,7 +171,7 @@ For simple, fast system queries, call a ready-made script directly:
 
 | User asks | Call |
 |---|---|
-| "check my Mac's health" | `call_remote("scripts/mac_health.sh")` |
+| "check my Mac's health" | `call_remote("scripts/mac_health.sh")` — text; add `args=["--json"]` for parsed output |
 | "how much RAM / memory?" | `call_remote("scripts/mac_ram.sh")` |
 | "disk space?" | `call_remote("scripts/mac_disk.sh")` |
 | "what's using CPU?" | `call_remote("scripts/mac_top.sh")` |

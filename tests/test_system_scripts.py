@@ -134,6 +134,107 @@ def test_example_system_scripts_match_install_templates(script_name: str, marker
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# mac_health.sh --json tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+@pytest.fixture()
+def mac_health_script(tmp_path: Path) -> Path:
+    script = tmp_path / "mac_health.sh"
+    script.write_text(_extract_script("mac_health.sh", "MH"))
+    script.chmod(0o755)
+    return script
+
+
+def test_mac_health_default_text_output(mac_health_script: Path) -> None:
+    """Default (no flag) output is human-readable text with expected sections."""
+    result = subprocess.run(
+        [str(mac_health_script)],
+        capture_output=True, text=True, check=False,
+        env={**os.environ, "LC_ALL": "C"},
+    )
+    assert result.returncode == 0, result.stderr
+    for section in ["=== HOST ===", "=== UPTIME / LOAD ===", "=== MEMORY ===", "=== DISK ==="]:
+        assert section in result.stdout, f"missing {section!r} in text output"
+
+
+def test_mac_health_json_flag_valid_json(mac_health_script: Path) -> None:
+    """--json flag produces valid, parseable JSON."""
+    import json
+    result = subprocess.run(
+        [str(mac_health_script), "--json"],
+        capture_output=True, text=True, check=False,
+        env={**os.environ, "LC_ALL": "C"},
+    )
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)  # raises if invalid JSON
+    assert isinstance(data, dict)
+
+
+def test_mac_health_json_has_required_keys(mac_health_script: Path) -> None:
+    """--json output contains all documented fields."""
+    import json
+    result = subprocess.run(
+        [str(mac_health_script), "--json"],
+        capture_output=True, text=True, check=False,
+        env={**os.environ, "LC_ALL": "C"},
+    )
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    required = {
+        "host", "os", "uptime",
+        "load_1m", "load_5m", "load_15m",
+        "memory_total_bytes", "memory_free_bytes", "memory_used_bytes", "memory_used_pct",
+        "disk_total_1k", "disk_used_1k", "disk_avail_1k", "disk_used_pct",
+        "top_procs",
+    }
+    missing = required - data.keys()
+    assert not missing, f"missing keys in JSON output: {missing}"
+
+
+def test_mac_health_json_top_procs_structure(mac_health_script: Path) -> None:
+    """top_procs is a list of dicts with expected per-process keys."""
+    import json
+    result = subprocess.run(
+        [str(mac_health_script), "--json"],
+        capture_output=True, text=True, check=False,
+        env={**os.environ, "LC_ALL": "C"},
+    )
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    procs = data["top_procs"]
+    assert isinstance(procs, list)
+    for proc in procs:
+        for key in ("pid", "cpu_pct", "mem_pct", "name"):
+            assert key in proc, f"proc missing key {key!r}: {proc}"
+
+
+def test_mac_health_json_memory_bytes_positive(mac_health_script: Path) -> None:
+    """memory_total_bytes should be a positive integer on any real machine."""
+    import json
+    result = subprocess.run(
+        [str(mac_health_script), "--json"],
+        capture_output=True, text=True, check=False,
+        env={**os.environ, "LC_ALL": "C"},
+    )
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    assert isinstance(data["memory_total_bytes"], int)
+    assert data["memory_total_bytes"] > 0, "memory_total_bytes should be > 0"
+
+
+def test_mac_health_text_mode_unchanged(mac_health_script: Path) -> None:
+    """Text output must NOT contain JSON artefacts (no braces/quotes at line start)."""
+    result = subprocess.run(
+        [str(mac_health_script)],
+        capture_output=True, text=True, check=False,
+        env={**os.environ, "LC_ALL": "C"},
+    )
+    assert result.returncode == 0, result.stderr
+    # First character of output should not be '{' (that would mean JSON leaked into text mode)
+    assert not result.stdout.strip().startswith("{"), "text mode output looks like JSON"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # process_kill.sh tests
 # ─────────────────────────────────────────────────────────────────────────────
 
