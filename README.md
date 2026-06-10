@@ -1,6 +1,8 @@
 # cowork-to-code-bridge
 
 [![CI](https://github.com/abhinaykrupa/cowork-to-code-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/abhinaykrupa/cowork-to-code-bridge/actions/workflows/ci.yml)
+[![selfcheck](https://github.com/abhinaykrupa/cowork-to-code-bridge/actions/workflows/ci.yml/badge.svg?label=selfcheck)](https://github.com/abhinaykrupa/cowork-to-code-bridge/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-%3E%3D3.10-blue?logo=python&logoColor=white)](https://pypi.org/project/cowork-to-code-bridge/)
 [![PyPI](https://img.shields.io/pypi/v/cowork-to-code-bridge)](https://pypi.org/project/cowork-to-code-bridge/)
 [![PyPI downloads](https://img.shields.io/pypi/dm/cowork-to-code-bridge)](https://pypi.org/project/cowork-to-code-bridge/)
 [![Stars](https://img.shields.io/github/stars/abhinaykrupa/cowork-to-code-bridge?style=social)](https://github.com/abhinaykrupa/cowork-to-code-bridge/stargazers)
