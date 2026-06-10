@@ -1470,44 +1470,7 @@ chmod +x "$BRIDGE_ROOT/scripts/request_cowork.sh"
 mkdir -p "$BRIDGE_ROOT/to_cowork" "$BRIDGE_ROOT/cowork_results"
 chmod 700 "$BRIDGE_ROOT/to_cowork" "$BRIDGE_ROOT/cowork_results" 2>/dev/null || true
 
-# escalate_to_claude.sh — hand a task from an external agent (Hermes, cron, etc.)
-# to Claude Code running on this machine.
-cat > "$BRIDGE_ROOT/scripts/escalate_to_claude.sh" <<'ESCL'
-#!/usr/bin/env bash
-# escalate_to_claude.sh — hand a task from Hermes/daemon to Claude Code on this machine.
-# Usage: escalate_to_claude.sh "Debug the API issue" [--wait SECONDS]
-set -euo pipefail
-BRIDGE_ROOT="${BRIDGE_ROOT:-$HOME/.cowork-to-code-bridge}"
-INBOX="$BRIDGE_ROOT/to_cowork"; REPLIES="$BRIDGE_ROOT/cowork_results"
-REQUEST="${1:?usage: escalate_to_claude.sh \"<escalation text>\" [--wait SECONDS]}"; shift || true
-WAIT=0
-if [[ "${1:-}" == "--wait" ]]; then
-  WAIT="${2:-300}"
-  [[ "$WAIT" =~ ^[0-9]+$ ]] || { echo "--wait expects seconds, got: $WAIT" >&2; exit 2; }
-  shift 2 || true
-fi
-mkdir -p "$INBOX" "$REPLIES"; chmod 700 "$INBOX" "$REPLIES" 2>/dev/null || true
-ID="$(date +%s)_$$_${RANDOM}"
-TOKEN=""
-[[ -f "$BRIDGE_ROOT/.env" ]] && TOKEN="$(grep '^BRIDGE_TOKEN=' "$BRIDGE_ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]')"
-TMP="$INBOX/.$ID.json.tmp"; OUT="$INBOX/$ID.json"
-python3 - "$ID" "$REQUEST" "$TOKEN" >"$TMP" <<'PY'
-import json,sys,time,os
-_id,req,tok=sys.argv[1],sys.argv[2],sys.argv[3]
-o={"id":_id,"request":req,"ts":time.time(),"from":"escalation-daemon","escalation_context":{"hostname":os.uname().nodename,"user":os.getenv("USER","unknown"),"cwd":os.getcwd()}}
-if tok:o["token"]=tok
-print(json.dumps(o))
-PY
-mv "$TMP" "$OUT"; echo "escalation queued for Claude Code: $OUT"
-if [[ "$WAIT" -gt 0 ]]; then
-  RF="$REPLIES/$ID.json"; dl=$(( $(date +%s)+WAIT ))
-  while [[ "$(date +%s)" -lt "$dl" ]]; do [[ -f "$RF" ]] && { echo "=== Claude Code reply ==="; cat "$RF"; exit 0; }; sleep 2; done
-  echo "no reply within ${WAIT}s; escalation stays queued." >&2
-fi
-ESCL
-chmod +x "$BRIDGE_ROOT/scripts/escalate_to_claude.sh"
-
-chmod +x "$BRIDGE_ROOT"/scripts/mac_*.sh "$BRIDGE_ROOT/scripts/port_check.sh" "$BRIDGE_ROOT/scripts/docker_ps.sh" "$BRIDGE_ROOT/scripts/docker_logs.sh" "$BRIDGE_ROOT/scripts/pkg_outdated.sh" "$BRIDGE_ROOT/scripts/git_status.sh" "$BRIDGE_ROOT/scripts/list_scripts.sh" "$BRIDGE_ROOT/scripts/env_check.sh" "$BRIDGE_ROOT/scripts/disk_hogs.sh" "$BRIDGE_ROOT/scripts/open_browser.sh" "$BRIDGE_ROOT/scripts/escalate_to_claude.sh"
+chmod +x "$BRIDGE_ROOT"/scripts/mac_*.sh "$BRIDGE_ROOT/scripts/port_check.sh" "$BRIDGE_ROOT/scripts/docker_ps.sh" "$BRIDGE_ROOT/scripts/docker_logs.sh" "$BRIDGE_ROOT/scripts/pkg_outdated.sh" "$BRIDGE_ROOT/scripts/git_status.sh" "$BRIDGE_ROOT/scripts/list_scripts.sh" "$BRIDGE_ROOT/scripts/env_check.sh" "$BRIDGE_ROOT/scripts/disk_hogs.sh" "$BRIDGE_ROOT/scripts/open_browser.sh"
 
 # process_kill.sh — terminate a named process or PID from Cowork.
 # Safety guards: refuses PID ≤ 10, refuses protected names (launchd/kernel_task/
@@ -1520,12 +1483,11 @@ cat > "$BRIDGE_ROOT/scripts/process_kill.sh" <<'PK'
 #
 # Usage
 # -----
-#   process_kill.sh <name|PID> [--all] [--json]
+#   process_kill.sh <name|PID> [--all]
 #
 #   Name path : exact match via pgrep -x.
 #               Refuses if >1 match unless --all is passed.
 #   PID path  : numeric PID; must exist and be > 10.
-#   --json    : emit a machine-parseable result object instead of text.
 #
 # Safety guards
 # -------------
@@ -1533,13 +1495,6 @@ cat > "$BRIDGE_ROOT/scripts/process_kill.sh" <<'PK'
 #   - Protected names refused: launchd, kernel_task, systemd, init, kernel, kthreadd
 #   - Sends SIGTERM (graceful), never SIGKILL
 #   - Confirms process is gone after the signal
-#
-# JSON output (--json)
-# --------------------
-# A stable object Cowork can consume without scraping text:
-#   { "ok", "target", "mode": "pid"|"name", "killed": [pids],
-#     "remaining": [pids], "error": "<msg or null>" }
-# On refusal/error, ok=false and error is set; killed/remaining reflect state.
 #
 # Works on macOS and Linux. No deps beyond bash + coreutils.
 #
@@ -1551,16 +1506,10 @@ set -uo pipefail
 BRIDGE_PGREP_CMD="${BRIDGE_PGREP_CMD:-pgrep}"
 BRIDGE_KILL_CMD="${BRIDGE_KILL_CMD:-kill}"
 
-TARGET="${1:?usage: process_kill.sh <name|PID> [--all] [--json]}"
+TARGET="${1:?usage: process_kill.sh <name|PID> [--all]}"
 ALL_FLAG=0
-JSON=0
 shift || true
-for arg in "$@"; do
-  case "$arg" in
-    --all)  ALL_FLAG=1 ;;
-    --json) JSON=1 ;;
-  esac
-done
+for arg in "$@"; do [[ "$arg" == "--all" ]] && ALL_FLAG=1; done
 
 PROTECTED_NAMES=("launchd" "kernel_task" "systemd" "init" "kernel" "kthreadd")
 
@@ -1572,40 +1521,10 @@ _is_protected() {
   return 1
 }
 
-# ── JSON emitters ────────────────────────────────────────────────────────────
-# Emit a JSON result and exit with the given code. Whitespace-separated PID
-# lists are turned into JSON arrays; error is a string or null.
-_json_emit() {
-  local ok="$1" mode="$2" killed="$3" remaining="$4" err="$5" code="$6"
-  python3 - "$ok" "$TARGET" "$mode" "$killed" "$remaining" "$err" <<'PY'
-import json, sys
-ok, target, mode, killed, remaining, err = sys.argv[1:7]
-to_list = lambda s: [int(x) for x in s.split()] if s.strip() else []
-print(json.dumps({
-    "ok": ok == "1",
-    "target": target,
-    "mode": mode,
-    "killed": to_list(killed),
-    "remaining": to_list(remaining),
-    "error": err if err else None,
-}))
-PY
-  exit "$code"
-}
-
-# Fail helper: in JSON mode emit structured error, else print to stderr.
-_fail() {
-  local msg="$1" mode="${2:-}" code="${3:-1}"
-  if [[ "$JSON" -eq 1 ]]; then
-    _json_emit 0 "$mode" "" "" "$msg" "$code"
-  fi
-  echo "ERROR: $msg" >&2
-  exit "$code"
-}
-
 # Refuse protected names before any pgrep/kill call.
 if _is_protected "$TARGET"; then
-  _fail "refusing to kill protected process: $TARGET" "" 1
+  echo "ERROR: refusing to kill protected process: $TARGET" >&2
+  exit 1
 fi
 
 # ─── PID path ─────────────────────────────────────────────────────────────────
@@ -1613,34 +1532,31 @@ if [[ "$TARGET" =~ ^[0-9]+$ ]]; then
   PID="$TARGET"
 
   if (( PID <= 10 )); then
-    _fail "refusing to kill PID $PID (≤ 10 is kernel/init territory)" "pid" 1
+    echo "ERROR: refusing to kill PID $PID (≤ 10 is kernel/init territory)" >&2
+    exit 1
   fi
 
   if ! "$BRIDGE_KILL_CMD" -0 "$PID" 2>/dev/null; then
-    _fail "no process with PID $PID" "pid" 1
+    echo "ERROR: no process with PID $PID" >&2
+    exit 1
   fi
 
   PROC_NAME="$(ps -p "$PID" -o comm= 2>/dev/null | tr -d ' ' || echo '?')"
   if _is_protected "$PROC_NAME"; then
-    _fail "refusing to kill protected process: $PROC_NAME (PID $PID)" "pid" 1
+    echo "ERROR: refusing to kill protected process: $PROC_NAME (PID $PID)" >&2
+    exit 1
   fi
 
-  [[ "$JSON" -eq 0 ]] && echo "Sending SIGTERM to PID $PID ($PROC_NAME)..."
+  echo "Sending SIGTERM to PID $PID ($PROC_NAME)..."
   "$BRIDGE_KILL_CMD" -TERM "$PID"
 
   for i in 1 2 3 4 5 6; do
     sleep 0.5
     if ! "$BRIDGE_KILL_CMD" -0 "$PID" 2>/dev/null; then
-      if [[ "$JSON" -eq 1 ]]; then
-        _json_emit 1 "pid" "$PID" "" "" 0
-      fi
       echo "✓ PID $PID ($PROC_NAME) is gone"
       exit 0
     fi
   done
-  if [[ "$JSON" -eq 1 ]]; then
-    _json_emit 0 "pid" "" "$PID" "PID $PID still alive after 3s — may need SIGKILL" 1
-  fi
   echo "⚠ PID $PID ($PROC_NAME) still alive after 3s — may need SIGKILL" >&2
   exit 1
 fi
@@ -1650,153 +1566,50 @@ fi
 PIDS="$("$BRIDGE_PGREP_CMD" -x "$TARGET" 2>/dev/null || true)"
 
 if [[ -z "$PIDS" ]]; then
-  _fail "no process named '$TARGET' found" "name" 1
+  echo "ERROR: no process named '$TARGET' found" >&2
+  exit 1
 fi
 
 PID_COUNT="$(echo "$PIDS" | wc -l | tr -d ' ')"
 
 if [[ "$PID_COUNT" -gt 1 && "$ALL_FLAG" -eq 0 ]]; then
-  if [[ "$JSON" -eq 1 ]]; then
-    _json_emit 0 "name" "" "$(echo "$PIDS" | tr '\n' ' ')" \
-      "$PID_COUNT processes named '$TARGET' found — pass --all to kill all, or use a specific PID" 1
-  fi
   echo "ERROR: $PID_COUNT processes named '$TARGET' found (PIDs: $(echo "$PIDS" | tr '\n' ' '))" >&2
   echo "  Pass --all to kill all of them, or use a specific PID instead." >&2
   exit 1
 fi
 
-KILLED_PIDS=""
 KILLED=0
 while IFS= read -r pid; do
   [[ -z "$pid" ]] && continue
   if (( pid <= 10 )); then
-    [[ "$JSON" -eq 0 ]] && echo "  skipping PID $pid (≤ 10)" >&2
+    echo "  skipping PID $pid (≤ 10)" >&2
     continue
   fi
-  [[ "$JSON" -eq 0 ]] && echo "Sending SIGTERM to PID $pid ($TARGET)..."
+  echo "Sending SIGTERM to PID $pid ($TARGET)..."
   if "$BRIDGE_KILL_CMD" -TERM "$pid" 2>/dev/null; then
     KILLED=$(( KILLED + 1 ))
-    KILLED_PIDS="$KILLED_PIDS $pid"
   else
-    [[ "$JSON" -eq 0 ]] && echo "  WARNING: could not send SIGTERM to PID $pid" >&2
+    echo "  WARNING: could not send SIGTERM to PID $pid" >&2
   fi
 done <<< "$PIDS"
 
 if [[ "$KILLED" -eq 0 ]]; then
-  _fail "no processes were killed" "name" 1
+  echo "ERROR: no processes were killed" >&2
+  exit 1
 fi
 
 sleep 0.5
-REMAINING_PIDS="$({ "$BRIDGE_PGREP_CMD" -x "$TARGET" 2>/dev/null || true; } | tr '\n' ' ')"
-REMAINING="$(echo "$REMAINING_PIDS" | wc -w | tr -d ' ')"
+REMAINING="$("$BRIDGE_PGREP_CMD" -x "$TARGET" 2>/dev/null | wc -l | tr -d ' ' || echo 0)"
 if [[ "$REMAINING" -eq 0 ]]; then
-  if [[ "$JSON" -eq 1 ]]; then
-    _json_emit 1 "name" "$KILLED_PIDS" "" "" 0
-  fi
   echo "✓ $KILLED '$TARGET' process(es) terminated"
 else
-  if [[ "$JSON" -eq 1 ]]; then
-    _json_emit 0 "name" "$KILLED_PIDS" "$REMAINING_PIDS" \
-      "$REMAINING '$TARGET' process(es) still alive after SIGTERM — may need SIGKILL" 1
-  fi
   echo "⚠ $REMAINING '$TARGET' process(es) still alive after SIGTERM — may need SIGKILL" >&2
   exit 1
 fi
 PK
 chmod +x "$BRIDGE_ROOT/scripts/process_kill.sh"
 
-# mcp_audit.sh — cross-surface MCP audit.
-# Addresses: anthropics/claude-code#56353 — no first-class tool to compare
-# MCPs registered in local Claude Code vs what a Cowork session can reach.
-# This script runs on the machine side; Cowork receives the JSON output and
-# can diff it against its own session's available connectors/plugins.
-cat > "$BRIDGE_ROOT/scripts/mcp_audit.sh" <<'MCPAUDIT'
-#!/usr/bin/env bash
-# mcp_audit.sh — enumerate MCPs registered in local Claude Code (all scopes).
-#
-# Motivation
-# ----------
-# `claude mcp list` only shows one surface at a time. There is no built-in
-# tool to compare what's registered locally vs what a remote surface (e.g.
-# Cowork) can reach. This script captures the local side so Cowork can
-# produce a side-by-side diff of local MCPs vs Cowork-reachable connectors.
-# (ref: anthropics/claude-code#56353, labeled area:mcp + enhancement)
-#
-# Usage from Cowork
-# -----------------
-#   r = call_remote("scripts/mcp_audit.sh")
-#   # r["stdout"] contains JSON with the local MCP registry snapshot
-#
-# Output format
-# -------------
-# {"claude_version":"...","mcps":[{"scope":"...","name":"...","type":"...","command":"..."},...]}
-# Falls back to {"claude_version":"...","mcps_raw":"<plain text>"} for older
-# Claude Code versions that do not support --output-format json on mcp list.
-set -uo pipefail
-
-find_claude() {
-  local p; p="$(command -v claude 2>/dev/null || true)"
-  if [[ -n "$p" && -x "$p" ]]; then echo "$p"; return 0; fi
-  local cand
-  for cand in /opt/homebrew/bin/claude /usr/local/bin/claude \
-              "$HOME/.local/bin/claude" "$HOME/.claude/bin/claude"; do
-    [[ -x "$cand" ]] && { echo "$cand"; return 0; }
-  done
-  local appdir="$HOME/Library/Application Support/Claude/claude-code"
-  if [[ -d "$appdir" ]]; then
-    local b; b="$(find "$appdir" -maxdepth 4 -type f -name claude -perm -u+x 2>/dev/null | sort -V | tail -1)"
-    [[ -n "$b" && -x "$b" ]] && { echo "$b"; return 0; }
-  fi
-  return 1
-}
-
-CLAUDE_BIN="$(find_claude 2>/dev/null || true)"
-if [[ -z "${CLAUDE_BIN:-}" ]]; then
-  printf '{"error":"claude CLI not found — install it: curl -fsSL https://claude.ai/install.sh | bash","mcps":[]}\n'
-  exit 127
-fi
-
-CLAUDE_VERSION="$("$CLAUDE_BIN" --version 2>/dev/null | head -1 | tr -d '\n' || echo 'unknown')"
-HOSTNAME_VAL="$(hostname 2>/dev/null || echo 'unknown')"
-TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo 'unknown')"
-
-# Try JSON output (supported in Claude Code >= 1.x with mcp list --output-format).
-# If the flag is unrecognised, fall back to plain-text and wrap it.
-if MCP_JSON="$("$CLAUDE_BIN" mcp list --output-format json 2>/dev/null)" && \
-   echo "$MCP_JSON" | python3 -c "import json,sys; json.load(sys.stdin)" 2>/dev/null; then
-  # Wrap with audit metadata so Cowork has context alongside the raw list.
-  python3 - "$CLAUDE_VERSION" "$HOSTNAME_VAL" "$TIMESTAMP" "$MCP_JSON" <<'PY'
-import json, sys
-version, host, ts, raw = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-mcps = json.loads(raw) if isinstance(json.loads(raw), list) else json.loads(raw).get("mcps", json.loads(raw))
-print(json.dumps({
-    "claude_version": version,
-    "hostname": host,
-    "timestamp": ts,
-    "mcp_count": len(mcps) if isinstance(mcps, list) else "unknown",
-    "mcps": mcps,
-}))
-PY
-else
-  # Older Claude Code: plain-text fallback.
-  MCP_TEXT="$("$CLAUDE_BIN" mcp list 2>&1 || echo '(no MCPs registered or command failed)')"
-  python3 - "$CLAUDE_VERSION" "$HOSTNAME_VAL" "$TIMESTAMP" "$MCP_TEXT" <<'PY'
-import json, sys
-version, host, ts, text = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-print(json.dumps({
-    "claude_version": version,
-    "hostname": host,
-    "timestamp": ts,
-    "note": "plain-text fallback (upgrade claude CLI for structured JSON output)",
-    "mcps_raw": text,
-}))
-PY
-fi
-MCPAUDIT
-chmod +x "$BRIDGE_ROOT/scripts/mcp_audit.sh"
-
-
-c_green "  ✓ scripts installed: ping, hello, run_claude, mac_health, mac_ram, mac_disk, mac_top, mac_network, port_check, docker_ps, docker_logs, pkg_outdated, git_status, list_scripts, env_check, disk_hogs, open_browser, request_cowork, process_kill, mcp_audit"
+c_green "  ✓ scripts installed: ping, hello, run_claude, mac_health, mac_ram, mac_disk, mac_top, mac_network, port_check, docker_ps, docker_logs, pkg_outdated, git_status, list_scripts, env_check, disk_hogs, open_browser, request_cowork, process_kill"
 
 # ─── 5b. Fetch the single-file Cowork client (one source of truth) ───────────
 # bridge_client.py is the EXACT file the Cowork sandbox imports. To avoid drift,

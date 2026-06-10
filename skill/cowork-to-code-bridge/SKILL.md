@@ -176,13 +176,19 @@ For simple, fast system queries, call a ready-made script directly:
 | "disk space?" | `call_remote("scripts/mac_disk.sh")` |
 | "what's using CPU?" | `call_remote("scripts/mac_top.sh")` |
 | "network status?" | `call_remote("scripts/mac_network.sh")` |
-| "what's listening on port 3000?" | `call_remote("scripts/port_check.sh", args=["3000"])` (add `"--json"` → `{port, listening, tool, raw}`) |
-| "what Docker containers are running?" | `call_remote("scripts/docker_ps.sh")` (add `"--json"` → `{ok, error, containers:[{name,image,status,ports}]}`) |
-| "what's the git status of ~/myproject?" | `call_remote("scripts/git_status.sh", args=["/path/to/repo"])` (add `"--json"` for a parseable `{branch, upstream, ahead, behind, clean, files:[{x,y,path}]}` object) |
-| "any outdated packages?" | `call_remote("scripts/pkg_outdated.sh")` (add `"--json"` → `{manager, count, packages, raw}`) |
-| "check the bridge environment" | `call_remote("scripts/env_check.sh")` (add `"--json"` → `{bridge_root, bridge_root_exists, bridge_token_set, claude_flags, shell, home, os, claude_cli}`) |
-| "what MCPs do you have on your machine?" | `call_remote("scripts/mcp_audit.sh")` |
-| "stop my Rails server" / "kill pid 1234" | `call_remote("scripts/process_kill.sh", args=["rails"])` (add `"--all"` to kill every match; protected procs and PID ≤ 10 refused) |
+| "what's listening on port 3000?" | `call_remote("scripts/port_check.sh", args=["3000"])` |
+| "what Docker containers are running?" | `call_remote("scripts/docker_ps.sh")` |
+| "show logs for container X" / "docker logs for my-app" | `call_remote("scripts/docker_logs.sh", args=["<container>", "50"])` |
+| "what's the git status of ~/myproject?" | `call_remote("scripts/git_status.sh", args=["/path/to/repo"])` |
+| "any outdated packages?" | `call_remote("scripts/pkg_outdated.sh")` |
+| "what scripts can you run on my machine?" | `call_remote("scripts/list_scripts.sh")` |
+| "show my machine's env / PATH / claude CLI" | `call_remote("scripts/env_check.sh")` |
+| "what's eating disk in ~/Downloads?" | `call_remote("scripts/disk_hogs.sh", args=["~/Downloads", "15"])` |
+| "kill process rails" / "stop PID 1234" | `call_remote("scripts/process_kill.sh", args=["rails"])` or `args=["1234"]` |
+| "open localhost:3000 in my browser" | `call_remote("scripts/open_browser.sh", args=["http://localhost:3000"])` |
+
+**Tip:** if you're unsure what's available, call `list_scripts.sh` first — it
+returns every script the bridge can run, with a one-line description of each.
 
 For a repeatable custom action, help the user save a small script in
 `~/.cowork-to-code-bridge/scripts/` on their Mac, then call it by name.
