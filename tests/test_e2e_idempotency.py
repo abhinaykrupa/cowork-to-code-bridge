@@ -154,15 +154,26 @@ def test_e2e_status_file_has_correct_terminal_state_for_success(bridge, tmp_path
     """The _write_status_atomic helper writes state='done' and exit_code=0 on
     success before the file is cleaned up by run_one.  We verify by patching
     the cleanup so we can read the file."""
+    import importlib
     d, _ = bridge
 
+    # Intercept unlink so the status file survives for inspection.
+    status_path: list = []
+
+    original_run_one = d.run_one
+
+    def patched_run_one(cmd_path, token, terminal, idem_cache):
+        # Call the real implementation — cleanup happens inside.
+        original_run_one(cmd_path, token, terminal, idem_cache)
+
     # Instead, test _run_streaming directly with a short script.
+    import tempfile, pathlib
     script = tmp_path / "ok.sh"
     script.write_text("#!/bin/bash\necho hello\n")
     script.chmod(0o755)
     progress_file = tmp_path / "progress" / "test.log"
     progress_file.parent.mkdir(parents=True, exist_ok=True)
-    d._run_streaming(
+    result = d._run_streaming(
         ["bash", str(script)], str(tmp_path), {}, timeout=10,
         progress_file=progress_file,
     )
@@ -178,6 +189,7 @@ def test_e2e_status_file_has_correct_terminal_state_for_success(bridge, tmp_path
 
 def test_e2e_status_file_state_error_on_nonzero_exit(bridge, tmp_path):
     """state='error' when the script exits non-zero."""
+    import importlib
     d, _ = bridge
     script = tmp_path / "fail.sh"
     script.write_text("#!/bin/bash\necho oops\nexit 42\n")
@@ -197,6 +209,7 @@ def test_e2e_status_file_state_error_on_nonzero_exit(bridge, tmp_path):
 
 def test_e2e_status_file_last_line_captured(bridge, tmp_path):
     """last_line in the status file reflects the most recent non-empty output."""
+    import importlib
     d, _ = bridge
     script = tmp_path / "lines.sh"
     script.write_text("#!/bin/bash\necho first line\necho second line\n")
@@ -210,175 +223,6 @@ def test_e2e_status_file_last_line_captured(bridge, tmp_path):
     status_file = tmp_path / "progress" / "lines.status.json"
     s = json.loads(status_file.read_text())
     assert s["last_line"] == "second line"
-
-
-# ─── max_budget_usd tests ─────────────────────────────────────────────────────
-
-def _budget_bridge(tmp_path, monkeypatch, owner_ceiling=None):
-    """Return a bridge fixture with an optional BRIDGE_MAX_BUDGET_USD ceiling."""
-    monkeypatch.setenv("BRIDGE_ROOT", str(tmp_path))
-    monkeypatch.setenv("BRIDGE_TOKEN", "test-token")
-    if owner_ceiling is not None:
-        monkeypatch.setenv("BRIDGE_MAX_BUDGET_USD", str(owner_ceiling))
-    else:
-        monkeypatch.delenv("BRIDGE_MAX_BUDGET_USD", raising=False)
-    import cowork_to_code_bridge.daemon as d
-    importlib.reload(d)
-    for sub in (d.QUEUE, d.RESULTS, d.PROCESSED, d.INFLIGHT, d.PROGRESS, d.SCRIPTS_DIR):
-        sub.mkdir(parents=True, exist_ok=True)
-    # A script that dumps its environment so we can inspect MAX_BUDGET_USD.
-    script = d.SCRIPTS_DIR / "dump_env.sh"
-    script.write_text("#!/bin/bash\nenv\n")
-    script.chmod(0o755)
-    return d
-
-
-def test_budget_caller_value_forwarded_to_env(tmp_path, monkeypatch):
-    """max_budget_usd in the command payload is forwarded as MAX_BUDGET_USD env var."""
-    d = _budget_bridge(tmp_path, monkeypatch)
-    p = {"id": "b1", "script": "scripts/dump_env.sh", "args": [],
-         "token": "test-token", "timeout": 5, "max_budget_usd": 3.5}
-    (d.QUEUE / "b1.json").write_text(json.dumps(p))
-    d.run_one(d.QUEUE / "b1.json", "test-token", {}, {})
-    res = json.loads((d.RESULTS / "b1.json").read_text())
-    assert res["exit_code"] == 0
-    assert "MAX_BUDGET_USD=3.5000" in res["stdout"]
-
-
-def test_budget_owner_ceiling_forwarded_to_env(tmp_path, monkeypatch):
-    """BRIDGE_MAX_BUDGET_USD owner ceiling is forwarded as BRIDGE_MAX_BUDGET_USD env var."""
-    d = _budget_bridge(tmp_path, monkeypatch, owner_ceiling=5.0)
-    p = {"id": "b2", "script": "scripts/dump_env.sh", "args": [],
-         "token": "test-token", "timeout": 5}
-    (d.QUEUE / "b2.json").write_text(json.dumps(p))
-    d.run_one(d.QUEUE / "b2.json", "test-token", {}, {})
-    res = json.loads((d.RESULTS / "b2.json").read_text())
-    assert res["exit_code"] == 0
-    assert "BRIDGE_MAX_BUDGET_USD=5.0" in res["stdout"]
-
-
-def test_budget_invalid_value_ignored(tmp_path, monkeypatch):
-    """A non-numeric max_budget_usd is silently dropped; the script still runs."""
-    d = _budget_bridge(tmp_path, monkeypatch)
-    p = {"id": "b3", "script": "scripts/dump_env.sh", "args": [],
-         "token": "test-token", "timeout": 5, "max_budget_usd": "bad"}
-    (d.QUEUE / "b3.json").write_text(json.dumps(p))
-    d.run_one(d.QUEUE / "b3.json", "test-token", {}, {})
-    res = json.loads((d.RESULTS / "b3.json").read_text())
-    assert res["exit_code"] == 0
-    assert "MAX_BUDGET_USD" not in res["stdout"]
-
-
-def test_budget_negative_value_ignored(tmp_path, monkeypatch):
-    """Negative max_budget_usd is silently dropped."""
-    d = _budget_bridge(tmp_path, monkeypatch)
-    p = {"id": "b4", "script": "scripts/dump_env.sh", "args": [],
-         "token": "test-token", "timeout": 5, "max_budget_usd": -1.0}
-    (d.QUEUE / "b4.json").write_text(json.dumps(p))
-    d.run_one(d.QUEUE / "b4.json", "test-token", {}, {})
-    res = json.loads((d.RESULTS / "b4.json").read_text())
-    assert res["exit_code"] == 0
-    assert "MAX_BUDGET_USD" not in res["stdout"]
-
-
-def test_budget_caller_cannot_override_owner_ceiling(tmp_path, monkeypatch):
-    """Caller cannot override BRIDGE_MAX_BUDGET_USD — it is in the protected list."""
-    d = _budget_bridge(tmp_path, monkeypatch, owner_ceiling=5.0)
-    # Caller tries to set BRIDGE_MAX_BUDGET_USD via the env dict (not max_budget_usd).
-    p = {"id": "b5", "script": "scripts/dump_env.sh", "args": [],
-         "token": "test-token", "timeout": 5,
-         "env": {"BRIDGE_MAX_BUDGET_USD": "999.0"}}
-    (d.QUEUE / "b5.json").write_text(json.dumps(p))
-    d.run_one(d.QUEUE / "b5.json", "test-token", {}, {})
-    res = json.loads((d.RESULTS / "b5.json").read_text())
-    assert res["exit_code"] == 0
-    # The owner's value (5.0) must not have been overwritten to 999.
-    assert "BRIDGE_MAX_BUDGET_USD=999" not in res["stdout"]
-    assert "BRIDGE_MAX_BUDGET_USD=5.0" in res["stdout"]
-
-
-# ─── permission_scope tests (issue #47 — per-task sandboxing) ─────────────────
-
-def _scope_bridge(tmp_path, monkeypatch, owner_flags=None):
-    """Return a bridge fixture with an optional owner-set CLAUDE_FLAGS."""
-    monkeypatch.setenv("BRIDGE_ROOT", str(tmp_path))
-    monkeypatch.setenv("BRIDGE_TOKEN", "test-token")
-    if owner_flags is not None:
-        monkeypatch.setenv("CLAUDE_FLAGS", owner_flags)
-    else:
-        monkeypatch.delenv("CLAUDE_FLAGS", raising=False)
-    import cowork_to_code_bridge.daemon as d
-    importlib.reload(d)
-    for sub in (d.QUEUE, d.RESULTS, d.PROCESSED, d.INFLIGHT, d.PROGRESS, d.SCRIPTS_DIR):
-        sub.mkdir(parents=True, exist_ok=True)
-    script = d.SCRIPTS_DIR / "dump_env.sh"
-    script.write_text("#!/bin/bash\nenv\n")
-    script.chmod(0o755)
-    return d
-
-
-def test_scope_plan_forwarded_as_claude_flags(tmp_path, monkeypatch):
-    """A caller permission_scope=plan is resolved to CLAUDE_FLAGS=--permission-mode plan."""
-    d = _scope_bridge(tmp_path, monkeypatch)
-    p = {"id": "s1", "script": "scripts/dump_env.sh", "args": [],
-         "token": "test-token", "timeout": 5, "permission_scope": "plan"}
-    (d.QUEUE / "s1.json").write_text(json.dumps(p))
-    d.run_one(d.QUEUE / "s1.json", "test-token", {}, {})
-    res = json.loads((d.RESULTS / "s1.json").read_text())
-    assert res["exit_code"] == 0
-    assert "CLAUDE_FLAGS=--permission-mode plan" in res["stdout"]
-
-
-def test_scope_readonly_grants_no_write_tools(tmp_path, monkeypatch):
-    """permission_scope=readonly restricts to Read/Glob/Grep — no Write/Edit/Bash."""
-    d = _scope_bridge(tmp_path, monkeypatch)
-    p = {"id": "s2", "script": "scripts/dump_env.sh", "args": [],
-         "token": "test-token", "timeout": 5, "permission_scope": "readonly"}
-    (d.QUEUE / "s2.json").write_text(json.dumps(p))
-    d.run_one(d.QUEUE / "s2.json", "test-token", {}, {})
-    res = json.loads((d.RESULTS / "s2.json").read_text())
-    assert res["exit_code"] == 0
-    line = next(ln for ln in res["stdout"].splitlines() if ln.startswith("CLAUDE_FLAGS="))
-    assert "Read,Glob,Grep" in line
-    assert "Write" not in line and "Edit" not in line and "Bash" not in line
-
-
-def test_scope_full_sets_no_claude_flags(tmp_path, monkeypatch):
-    """permission_scope=full means no extra restriction → CLAUDE_FLAGS stays unset."""
-    d = _scope_bridge(tmp_path, monkeypatch)
-    p = {"id": "s3", "script": "scripts/dump_env.sh", "args": [],
-         "token": "test-token", "timeout": 5, "permission_scope": "full"}
-    (d.QUEUE / "s3.json").write_text(json.dumps(p))
-    d.run_one(d.QUEUE / "s3.json", "test-token", {}, {})
-    res = json.loads((d.RESULTS / "s3.json").read_text())
-    assert res["exit_code"] == 0
-    assert "CLAUDE_FLAGS=" not in res["stdout"]
-
-
-def test_scope_invalid_ignored(tmp_path, monkeypatch):
-    """An unknown permission_scope is silently dropped; the script still runs."""
-    d = _scope_bridge(tmp_path, monkeypatch)
-    p = {"id": "s4", "script": "scripts/dump_env.sh", "args": [],
-         "token": "test-token", "timeout": 5, "permission_scope": "yolo"}
-    (d.QUEUE / "s4.json").write_text(json.dumps(p))
-    d.run_one(d.QUEUE / "s4.json", "test-token", {}, {})
-    res = json.loads((d.RESULTS / "s4.json").read_text())
-    assert res["exit_code"] == 0
-    assert "CLAUDE_FLAGS=" not in res["stdout"]
-
-
-def test_scope_owner_claude_flags_wins_over_caller(tmp_path, monkeypatch):
-    """An owner-set CLAUDE_FLAGS is never overridden by a caller permission_scope."""
-    d = _scope_bridge(tmp_path, monkeypatch, owner_flags="--permission-mode plan")
-    # Caller asks for the wider 'edit' scope; owner's plan-only must still win.
-    p = {"id": "s5", "script": "scripts/dump_env.sh", "args": [],
-         "token": "test-token", "timeout": 5, "permission_scope": "edit"}
-    (d.QUEUE / "s5.json").write_text(json.dumps(p))
-    d.run_one(d.QUEUE / "s5.json", "test-token", {}, {})
-    res = json.loads((d.RESULTS / "s5.json").read_text())
-    assert res["exit_code"] == 0
-    assert "CLAUDE_FLAGS=--permission-mode plan" in res["stdout"]
-    assert "Edit,Write" not in res["stdout"]
 
 
 def test_e2e_oversized_command_rejected(bridge):

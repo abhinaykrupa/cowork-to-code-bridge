@@ -419,14 +419,6 @@ def call_remote_streaming(
         exit_code  (int)  present only when state != "running"
     Called only when the file changes (mtime-gated), so it fires at most once
     per daemon write cycle (~2 s).  Useful for a spinner / elapsed-time ticker.
-
-    interactive: when True, each poll iteration also scans to_cowork/*.json for
-    a request whose "parent" field matches this cmd_id. If found, returns early
-    with shape:
-        {"state": "awaiting_reply", "cmd_id": ..., "request_id": ...,
-         "question": ..., "from": "claude-code"}
-    The caller should show the question, call reply_to_machine(request_id, answer),
-    then call resume_remote(cmd_id, remaining_deadline) to re-enter the wait loop.
     """
     root = Path(bridge_root) if bridge_root else _resolve_bridge_root()
     queue = root / "queue"
@@ -495,24 +487,6 @@ def call_remote_streaming(
                     on_status(json.loads(status_file.read_text()))
             except (OSError, json.JSONDecodeError):
                 pass
-        # Interactive mode: check whether the running task has asked a question.
-        if interactive and to_cowork.exists():
-            for req_file in sorted(to_cowork.glob("*.json")):
-                try:
-                    req = json.loads(req_file.read_text())
-                except (OSError, json.JSONDecodeError):
-                    continue
-                if req.get("parent") == cmd_id:
-                    req_file.rename(req_file.with_suffix(".json.answered"))
-                    return {
-                        "state": "awaiting_reply",
-                        "cmd_id": cmd_id,
-                        "request_id": req.get("id", req_file.stem),
-                        "question": req.get("request", ""),
-                        "from": req.get("from", "claude-code"),
-                        "_deadline": deadline,
-                        "_bridge_root": str(root),
-                    }
         # Check for the final result.
         if result_file.exists():
             try:

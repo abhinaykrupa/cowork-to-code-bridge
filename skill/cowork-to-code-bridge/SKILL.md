@@ -125,45 +125,29 @@ Tell the user what's happening as chunks arrive (e.g. "installing deps…",
 "running tests…") rather than leaving them waiting. Same final result + same
 idempotency guarantees as `call_remote`.
 
-### Live status ticker (spinner line, no log dump)
+### Live status ticker (spinner + elapsed time)
 
-For a clean single-line status instead of raw log output, use `on_status`:
+The daemon writes `progress/<id>.status.json` every ~2 s with `{"elapsed_s", "last_line", "state"}`.
+Pass `on_status` to get a compact ticker that doesn't flood the log:
 
 ```python
 def on_status(s):
     SPINNER = "⣾⣽⣻⢿⡿⣟⣯⣷"
     tick = s["elapsed_s"] % len(SPINNER)
-    print(f"\r  {SPINNER[tick]} {s['last_line'][:60]}… ({s['elapsed_s']}s)", end="", flush=True)
+    print(f"\r  {SPINNER[tick]} {s['last_line'][:60]}… ({s['elapsed_s']}s)",
+          end="", flush=True)
 
 r = call_remote_streaming(
     "scripts/run_claude.sh",
-    args=["Run the tests and fix failures", "/Users/<them>/projects/repo"],
-    timeout=600, idempotency_key="test-run-1",
-    on_status=on_status,
+    args=["Build the app", "/Users/<them>/projects/app"],
+    timeout=900, on_status=on_status,
 )
-print()  # newline after spinner
-print(r["exit_code"]); print(r["stdout"])
+print()   # newline after the spinner
+print(r["exit_code"])
 ```
 
-`on_status` is called every ~2s with `{"elapsed_s": int, "last_line": str, "state": "running"|"done"|"error"}`.
-`on_progress` and `on_status` are independent — use either or both.
-
-**Async path (`queue_task` + `poll_task_result`):** when you fire-and-forget a long
-task, each `poll_task_result` while it's running now also returns the live ticker
-fields (`elapsed_s`, `last_line`, `state`) plus a ready-made `status_line` string:
-
-```python
-from cowork_to_code_bridge import queue_task, poll_task_result
-t = queue_task("scripts/run_claude.sh", args=["build my app"])
-while True:
-    s = poll_task_result(t["task_id"])
-    if s["status"] == "running":
-        print(s.get("status_line", "…running"))   # e.g. "⣾ Working… 42s elapsed"
-    elif s["status"] == "completed":
-        print(s["stdout"]); break
-```
-
-Roll your own label with `format_status_line(s, verb="Building", show_last_line=True)`.
+`on_status` and `on_progress` can be combined — `on_status` fires ~every 2 s
+for the ticker while `on_progress` captures the full raw log.
 
 ## Step 3 — quick fixed actions (no agent needed)
 
