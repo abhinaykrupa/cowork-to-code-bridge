@@ -281,6 +281,62 @@ def call_remote_streaming(
     )
 
 
+def call_mcp_tool(
+    server: str,
+    method: str,
+    params: dict | None = None,
+    timeout: int = 60,
+    bridge_root: str | None = None,
+) -> dict:
+    """Call a tool on a local stdio MCP server via the bridge proxy.
+
+    The MCP server must be registered on the Mac with mcp_register.sh first.
+
+    Args:
+        server:  Name of the registered MCP server (e.g. "filesystem", "postgres").
+        method:  MCP JSON-RPC method (e.g. "tools/list", "tools/call").
+        params:  Method parameters dict (e.g. {"name": "query", "arguments": {...}}).
+        timeout: Seconds to wait for the response.
+
+    Returns:
+        The bridge result dict.  r["mcp_response"] contains the parsed JSON-RPC
+        response when exit_code == 0.  Check r["mcp_response"].get("error") for
+        MCP-level errors.
+
+    Example::
+
+        r = call_mcp_tool("filesystem", "tools/list", {})
+        tools = r["mcp_response"]["result"]["tools"]
+
+        r = call_mcp_tool("postgres", "tools/call", {
+            "name": "query",
+            "arguments": {"sql": "SELECT count(*) FROM users"},
+        })
+        row = r["mcp_response"]["result"]["content"][0]["text"]
+    """
+<<<<<<< Updated upstream
+    args = ["--server", server, "--method", method]
+    if params is not None:
+        args += ["--params", json.dumps(params)]
+=======
+    args = ["--server", server, "--method", method]
+    if params is not None:
+        args += ["--params", json.dumps(params)]
+>>>>>>> Stashed changes
+    r = call_remote("scripts/mcp_proxy.sh", args=args, timeout=timeout,
+                    bridge_root=bridge_root)
+    if r.get("exit_code") == 0 and r.get("stdout"):
+        try:
+<<<<<<< Updated upstream
+            r["mcp_response"] = json.loads(r["stdout"])
+=======
+            r["mcp_response"] = json.loads(r["stdout"])
+>>>>>>> Stashed changes
+        except Exception:
+            pass
+    return r
+
+
 def daemon_alive(bridge_root: Path | str | None = None, ping_timeout: int = 10) -> bool:
     """Quick health check — submits the ping script and waits for exit_code==0."""
     try:
