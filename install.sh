@@ -1566,7 +1566,433 @@ fi
 PK
 chmod +x "$BRIDGE_ROOT/scripts/process_kill.sh"
 
-c_green "  ✓ scripts installed: ping, hello, run_claude, mac_health, mac_ram, mac_disk, mac_top, mac_network, port_check, docker_ps, docker_logs, pkg_outdated, git_status, list_scripts, env_check, disk_hogs, open_browser, request_cowork, process_kill"
+# ── mcp_proxy.sh ──────────────────────────────────────────────────────────────
+cat > "$BRIDGE_ROOT/scripts/mcp_proxy.sh" <<'MCPPROXY'
+#!/usr/bin/env bash
+# mcp_proxy.sh — relay a single MCP JSON-RPC call to a local stdio MCP server
+# and return the response through the bridge queue.
+#
+# This lets Claude Cowork reach any local stdio MCP server — a database client,
+# filesystem tool, or custom CLI — without a public HTTPS tunnel.
+# Addresses: anthropics/claude-code#53476, anthropics/claude-code#48909
+#
+# Usage
+# -----
+#   mcp_proxy.sh --server <name> --method <method> [--params <json>]
+#   mcp_proxy.sh --server <name> --request <full_jsonrpc_json>
+#
+# Server registry: $BRIDGE_ROOT/mcp_servers.json
+# Register servers with: mcp_register.sh
+#
+# Output (stdout): JSON-RPC response object, always valid JSON.
+# Exit code: always 0 — MCP-level errors are reported inside the JSON.
+#
+# Testability hooks
+#   BRIDGE_MCP_REGISTRY  override registry file path
+set -uo pipefail
+
+BRIDGE_ROOT="${BRIDGE_ROOT:-$HOME/.cowork-to-code-bridge}"
+REGISTRY="${BRIDGE_MCP_REGISTRY:-$BRIDGE_ROOT/mcp_servers.json}"
+
+usage() {
+  cat >&2 <<'EOF'
+Usage:
+  mcp_proxy.sh --server <name> --method <method> [--params <json>]
+  mcp_proxy.sh --server <name> --request <full_jsonrpc_json>
+
+Examples:
+  mcp_proxy.sh --server filesystem --method tools/list --params '{}'
+  mcp_proxy.sh --server postgres   --method tools/call \
+    --params '{"name":"query","arguments":{"sql":"SELECT 1"}}'
+EOF
+  exit 1
+}
+
+SERVER_NAME=""
+METHOD=""
+PARAMS="null"
+REQUEST_JSON=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --server)  SERVER_NAME="$2"; shift 2 ;;
+    --method)  METHOD="$2";      shift 2 ;;
+    --params)  PARAMS="$2";      shift 2 ;;
+    --request) REQUEST_JSON="$2";shift 2 ;;
+    -h|--help) usage ;;
+    *) echo "Unknown argument: $1" >&2; usage ;;
+  esac
+done
+
+[[ -z "$SERVER_NAME" ]] && { echo "ERROR: --server is required" >&2; usage; }
+[[ -z "$METHOD" && -z "$REQUEST_JSON" ]] && { echo "ERROR: --method or --request is required" >&2; usage; }
+
+# ── Python handles the MCP stdio protocol ─────────────────────────────────────
+python3 - \
+  "$SERVER_NAME" \
+  "$METHOD" \
+  "$PARAMS" \
+  "$REQUEST_JSON" \
+  "$REGISTRY" \
+<<'PYEOF'
+import sys, json, subprocess, time, os
+
+server_name  = sys.argv[1]
+method       = sys.argv[2]
+params_raw   = sys.argv[3]
+request_raw  = sys.argv[4]
+registry_path = sys.argv[5]
+
+def die(msg):
+    print(json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": -32000, "message": msg}}))
+    sys.exit(0)
+
+if not os.path.exists(registry_path):
+    die(f"No server registry at {registry_path}. Run mcp_register.sh first.")
+
+try:
+    registry = json.load(open(registry_path))
+except Exception as e:
+    die(f"Cannot read registry: {e}")
+
+if server_name not in registry:
+    known = list(registry.keys())
+    die(f"Server '{server_name}' not registered. Known servers: {known}")
+
+cfg = registry[server_name]
+cmd = [cfg["command"]] + cfg.get("args", [])
+env = {**os.environ, **cfg.get("env", {})}
+
+if request_raw:
+    try:
+        user_req = json.loads(request_raw)
+    except Exception as e:
+        die(f"Invalid --request JSON: {e}")
+else:
+    try:
+        params = json.loads(params_raw)
+    except Exception as e:
+        die(f"Invalid --params JSON: {e}")
+    user_req = {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": method,
+        "params": params if params is not None else {},
+    }
+
+req_id = user_req.get("id", 2)
+
+INIT_REQ = json.dumps({
+    "jsonrpc": "2.0", "id": 1, "method": "initialize",
+    "params": {
+        "protocolVersion": "2024-11-05",
+        "capabilities": {},
+        "clientInfo": {"name": "cowork-bridge-proxy", "version": "1.0"},
+    }
+})
+INIT_NOTIF = json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"})
+
+try:
+    proc = subprocess.Popen(
+        cmd, env=env,
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, bufsize=1,
+    )
+except FileNotFoundError:
+    die(f"Command not found: {cmd[0]}")
+except Exception as e:
+    die(f"Failed to start server '{server_name}': {e}")
+
+def readline_timeout(stream, timeout=10.0):
+    import select
+    deadline = time.time() + timeout
+    buf = ""
+    while time.time() < deadline:
+        ready, _, _ = select.select([stream], [], [], 0.05)
+        if ready:
+            ch = stream.read(1)
+            if not ch:
+                return None
+            if ch == "\n":
+                return buf
+            buf += ch
+    return None
+
+result = None
+try:
+    proc.stdin.write(INIT_REQ + "\n")
+    proc.stdin.flush()
+
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        line = readline_timeout(proc.stdout, timeout=2.0)
+        if line is None:
+            break
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            msg = json.loads(line)
+            if msg.get("id") == 1:
+                if "error" in msg:
+                    result = msg
+                break
+        except Exception:
+            continue
+    else:
+        result = {"jsonrpc": "2.0", "id": req_id,
+                  "error": {"code": -32001, "message": "Initialize timeout"}}
+
+    if result is None:
+        proc.stdin.write(INIT_NOTIF + "\n")
+        proc.stdin.flush()
+        proc.stdin.write(json.dumps(user_req) + "\n")
+        proc.stdin.flush()
+
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            line = readline_timeout(proc.stdout, timeout=2.0)
+            if line is None:
+                result = {"jsonrpc": "2.0", "id": req_id,
+                          "error": {"code": -32002, "message": "Response timeout after 30s"}}
+                break
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+                if "id" in msg and msg["id"] == req_id:
+                    result = msg
+                    break
+            except Exception:
+                continue
+        else:
+            result = {"jsonrpc": "2.0", "id": req_id,
+                      "error": {"code": -32002, "message": "Response timeout after 30s"}}
+
+except Exception as e:
+    result = {"jsonrpc": "2.0", "id": req_id,
+              "error": {"code": -32603, "message": f"Protocol error: {e}"}}
+finally:
+    try:
+        proc.stdin.close()
+        proc.terminate()
+        proc.wait(timeout=3)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+if result is None:
+    result = {"jsonrpc": "2.0", "id": req_id,
+              "error": {"code": -32603, "message": "No response received"}}
+
+print(json.dumps(result))
+PYEOF
+MCPPROXY
+chmod +x "$BRIDGE_ROOT/scripts/mcp_proxy.sh"
+
+# ── mcp_register.sh ───────────────────────────────────────────────────────────
+cat > "$BRIDGE_ROOT/scripts/mcp_register.sh" <<'MCPREG'
+#!/usr/bin/env bash
+# mcp_register.sh — register a local stdio MCP server in the bridge registry.
+#
+# Usage
+# -----
+#   mcp_register.sh --name <name> --command <cmd> [--args <json_array>] [--env <json_object>]
+#   mcp_register.sh --remove <name>
+#   mcp_register.sh --list
+#
+# Examples
+# --------
+#   mcp_register.sh --name filesystem \
+#     --command npx \
+#     --args '["-y","@modelcontextprotocol/server-filesystem","/Users/me/projects"]'
+#
+#   mcp_register.sh --name postgres \
+#     --command uvx \
+#     --args '["mcp-server-postgres","postgresql://localhost/mydb"]'
+#
+# Testability hooks
+#   BRIDGE_MCP_REGISTRY  override registry file path
+set -uo pipefail
+
+BRIDGE_ROOT="${BRIDGE_ROOT:-$HOME/.cowork-to-code-bridge}"
+REGISTRY="${BRIDGE_MCP_REGISTRY:-$BRIDGE_ROOT/mcp_servers.json}"
+
+usage() {
+  cat >&2 <<'EOF'
+Usage:
+  mcp_register.sh --name <name> --command <cmd> [--args <json_array>] [--env <json_object>]
+  mcp_register.sh --remove <name>
+  mcp_register.sh --list
+EOF
+  exit 1
+}
+
+MODE="register"
+NAME=""
+COMMAND=""
+ARGS_JSON="[]"
+ENV_JSON="{}"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --name)    NAME="$2";      shift 2 ;;
+    --command) COMMAND="$2";   shift 2 ;;
+    --args)    ARGS_JSON="$2"; shift 2 ;;
+    --env)     ENV_JSON="$2";  shift 2 ;;
+    --remove)  MODE="remove"; NAME="$2"; shift 2 ;;
+    --list)    MODE="list";   shift ;;
+    -h|--help) usage ;;
+    *) echo "Unknown argument: $1" >&2; usage ;;
+  esac
+done
+
+python3 - "$MODE" "$NAME" "$COMMAND" "$ARGS_JSON" "$ENV_JSON" "$REGISTRY" <<'PYEOF'
+import sys, json, os
+
+mode          = sys.argv[1]
+name          = sys.argv[2]
+command       = sys.argv[3]
+args_raw      = sys.argv[4]
+env_raw       = sys.argv[5]
+registry_path = sys.argv[6]
+
+registry = {}
+if os.path.exists(registry_path):
+    try:
+        registry = json.load(open(registry_path))
+    except Exception as e:
+        print(f"WARNING: could not parse existing registry, starting fresh: {e}", file=sys.stderr)
+
+if mode == "list":
+    if not registry:
+        print("No MCP servers registered.")
+        print(f"Registry: {registry_path}")
+    else:
+        print(f"Registered MCP servers ({len(registry)}):")
+        for n, cfg in registry.items():
+            args_str = " ".join(cfg.get("args", []))
+            print(f"  {n:20s}  {cfg['command']} {args_str}")
+        print(f"\nRegistry: {registry_path}")
+    sys.exit(0)
+
+if mode == "remove":
+    if not name:
+        print("ERROR: --remove requires a server name", file=sys.stderr); sys.exit(1)
+    if name not in registry:
+        print(f"ERROR: '{name}' is not registered", file=sys.stderr); sys.exit(1)
+    del registry[name]
+    os.makedirs(os.path.dirname(registry_path), exist_ok=True)
+    with open(registry_path, "w") as f:
+        json.dump(registry, f, indent=2)
+    print(f"✓ Removed '{name}' from registry")
+    sys.exit(0)
+
+if not name:
+    print("ERROR: --name is required", file=sys.stderr); sys.exit(1)
+if not command:
+    print("ERROR: --command is required", file=sys.stderr); sys.exit(1)
+
+try:
+    args = json.loads(args_raw)
+    if not isinstance(args, list): raise ValueError("--args must be a JSON array")
+except Exception as e:
+    print(f"ERROR: invalid --args JSON: {e}", file=sys.stderr); sys.exit(1)
+
+try:
+    env = json.loads(env_raw)
+    if not isinstance(env, dict): raise ValueError("--env must be a JSON object")
+except Exception as e:
+    print(f"ERROR: invalid --env JSON: {e}", file=sys.stderr); sys.exit(1)
+
+registry[name] = {"command": command, "args": args, "env": env}
+os.makedirs(os.path.dirname(registry_path), exist_ok=True)
+tmp = registry_path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(registry, f, indent=2)
+os.replace(tmp, registry_path)
+
+print(f"✓ Registered '{name}'  →  {command} {' '.join(str(a) for a in args)}")
+print(f"  Registry: {registry_path}  ({len(registry)} server(s))")
+PYEOF
+MCPREG
+chmod +x "$BRIDGE_ROOT/scripts/mcp_register.sh"
+
+# ── mcp_list_servers.sh ───────────────────────────────────────────────────────
+cat > "$BRIDGE_ROOT/scripts/mcp_list_servers.sh" <<'MCPLIST'
+#!/usr/bin/env bash
+# mcp_list_servers.sh — list all MCP servers registered in the bridge registry.
+#
+# Usage: mcp_list_servers.sh [--json]
+#
+# Testability hooks
+#   BRIDGE_MCP_REGISTRY  override registry file path
+set -uo pipefail
+
+BRIDGE_ROOT="${BRIDGE_ROOT:-$HOME/.cowork-to-code-bridge}"
+REGISTRY="${BRIDGE_MCP_REGISTRY:-$BRIDGE_ROOT/mcp_servers.json}"
+JSON_OUT=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --json) JSON_OUT=1; shift ;;
+    -h|--help) echo "Usage: mcp_list_servers.sh [--json]" >&2; exit 0 ;;
+    *) echo "Unknown argument: $1" >&2; exit 1 ;;
+  esac
+done
+
+if [[ ! -f "$REGISTRY" ]]; then
+  if [[ "$JSON_OUT" -eq 1 ]]; then
+    echo '{"servers":{},"count":0,"registry":null}'
+  else
+    echo "No MCP servers registered."
+    echo "Register one with: mcp_register.sh --name <name> --command <cmd>"
+  fi
+  exit 0
+fi
+
+python3 - "$REGISTRY" "$JSON_OUT" <<'PYEOF'
+import sys, json
+
+registry_path = sys.argv[1]
+json_out      = sys.argv[2] == "1"
+
+try:
+    registry = json.load(open(registry_path))
+except Exception as e:
+    if json_out:
+        print(json.dumps({"error": str(e), "servers": {}, "count": 0}))
+    else:
+        print(f"ERROR reading registry: {e}")
+    sys.exit(0)
+
+if json_out:
+    print(json.dumps({"servers": registry, "count": len(registry),
+                      "registry": registry_path}, indent=2))
+    sys.exit(0)
+
+if not registry:
+    print("No MCP servers registered.")
+    print(f"Registry: {registry_path}")
+    sys.exit(0)
+
+print(f"Registered MCP servers ({len(registry)}):\n")
+print(f"  {'NAME':<20}  {'COMMAND':<12}  ARGS")
+print(f"  {'-'*20}  {'-'*12}  {'-'*30}")
+for name, cfg in sorted(registry.items()):
+    args_str = " ".join(str(a) for a in cfg.get("args", []))
+    if len(args_str) > 40:
+        args_str = args_str[:37] + "..."
+    print(f"  {name:<20}  {cfg['command']:<12}  {args_str}")
+print(f"\nRegistry: {registry_path}")
+PYEOF
+MCPLIST
+chmod +x "$BRIDGE_ROOT/scripts/mcp_list_servers.sh"
+
+c_green "  ✓ scripts installed: ping, hello, run_claude, mac_health, mac_ram, mac_disk, mac_top, mac_network, port_check, docker_ps, docker_logs, pkg_outdated, git_status, list_scripts, env_check, disk_hogs, open_browser, request_cowork, process_kill, mcp_proxy, mcp_register, mcp_list_servers"
 
 # ─── 5b. Fetch the single-file Cowork client (one source of truth) ───────────
 # bridge_client.py is the EXACT file the Cowork sandbox imports. To avoid drift,

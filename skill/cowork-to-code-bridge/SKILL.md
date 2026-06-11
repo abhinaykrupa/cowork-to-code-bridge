@@ -164,36 +164,98 @@ returns every script the bridge can run, with a one-line description of each.
 For a repeatable custom action, help the user save a small script in
 `~/.cowork-to-code-bridge/scripts/` on their Mac, then call it by name.
 
-### Cross-surface MCP audit
+## Step 4 — reach local MCP servers (no HTTPS tunnel needed)
 
-There is no built-in Anthropic tool to compare MCPs registered in local Claude
-Code vs what a Cowork session can reach (ref: anthropics/claude-code#56353).
-`mcp_audit.sh` captures the local side so you can diff it here:
+Claude Cowork only permits MCP connectors via public HTTPS endpoints. If you have
+a local stdio MCP server — a database client, filesystem tool, or custom CLI — it's
+normally unreachable from Cowork without a public tunnel.
+
+The bridge solves this. Register the server once on the Mac, then call it from Cowork
+through the existing file-based transport. No tunnel, no TLS cert, no exposed port.
+
+Addresses: [anthropics/claude-code#53476](https://github.com/anthropics/claude-code/issues/53476),
+[anthropics/claude-code#48909](https://github.com/anthropics/claude-code/issues/48909)
+
+### 1 — Register the MCP server (run once on the Mac)
 
 ```python
-import json
+# Register the MCP filesystem server
+r = call_remote("scripts/mcp_register.sh", args=[
+    "--name", "filesystem",
+    "--command", "npx",
+    "--args", '["-y","@modelcontextprotocol/server-filesystem","/Users/me/projects"]',
+])
+print(r["stdout"])
 
-r = call_remote("scripts/mcp_audit.sh")
-local = json.loads(r["stdout"])
-
-print(f"Machine: {local['hostname']}  (Claude Code {local['claude_version']})")
-print(f"Registered MCPs: {local.get('mcp_count', '?')}")
-
-# If structured JSON is available (Claude Code >= recent version):
-for mcp in local.get("mcps", []):
-    print(f"  [{mcp.get('scope','?')}] {mcp.get('name','?')}  type={mcp.get('type','?')}")
-
-# If older Claude Code (plain-text fallback):
-if "mcps_raw" in local:
-    print(local["mcps_raw"])
+# Register a Postgres MCP server
+r = call_remote("scripts/mcp_register.sh", args=[
+    "--name", "postgres",
+    "--command", "uvx",
+    "--args", '["mcp-server-postgres","postgresql://localhost/mydb"]',
+])
+print(r["stdout"])
 ```
 
-Compare the names in `local["mcps"]` against the connectors/plugins visible in
-this Cowork session. Any MCP present locally but absent here is a gap —
-the user may need to install the corresponding Cowork plugin or expose the
-MCP via the bridge.
+See what's registered:
+```python
+r = call_remote("scripts/mcp_list_servers.sh", args=["--json"])
+import json
+servers = json.loads(r["stdout"])
+print(servers)
+```
 
-## Step 4 — check the inbox (reverse direction: Claude Code → Cowork)
+### 2 — Call MCP tools from Cowork
+
+Use the `call_mcp_tool()` helper (already in `bridge_client.py`):
+
+```python
+from bridge_client import call_mcp_tool
+
+# List available tools on the filesystem server
+r = call_mcp_tool("filesystem", "tools/list", {})
+tools = r["mcp_response"]["result"]["tools"]
+for t in tools:
+    print(t["name"], "—", t.get("description", ""))
+
+# Read a file via the filesystem MCP
+r = call_mcp_tool("filesystem", "tools/call", {
+    "name": "read_file",
+    "arguments": {"path": "/Users/me/projects/myapp/README.md"},
+})
+content = r["mcp_response"]["result"]["content"][0]["text"]
+print(content)
+
+# Query Postgres via MCP
+r = call_mcp_tool("postgres", "tools/call", {
+    "name": "query",
+    "arguments": {"sql": "SELECT count(*) FROM users"},
+})
+row = r["mcp_response"]["result"]["content"][0]["text"]
+print(row)
+```
+
+Always check for errors:
+```python
+resp = r.get("mcp_response", {})
+if "error" in resp:
+    print("MCP error:", resp["error"]["message"])
+elif r.get("exit_code") != 0:
+    print("Bridge error:", r.get("stderr"))
+```
+
+### 3 — Quick-action table
+
+| User asks | Call |
+|---|---|
+| "what local MCP servers are registered?" | `call_remote("scripts/mcp_list_servers.sh", args=["--json"])` |
+| "register my postgres MCP" | `call_remote("scripts/mcp_register.sh", args=["--name","postgres","--command","uvx","--args",'["mcp-server-postgres","postgresql://localhost/mydb"]'])` |
+| "list tools on filesystem MCP" | `call_mcp_tool("filesystem", "tools/list", {})` |
+| "read a file via MCP" | `call_mcp_tool("filesystem", "tools/call", {"name":"read_file","arguments":{"path":"/path/to/file"}})` |
+
+`mcp_proxy.sh` always exits 0 — MCP-level errors appear inside the JSON under
+`r["mcp_response"]["error"]`, not the process exit code.
+
+## Step 5 — check the inbox (reverse direction: Claude Code → Cowork)
 
 Claude Code on the user's machine can leave requests for a Cowork session in
 `BRIDGE_ROOT/to_cowork/`. When the user says "check my inbox", "any requests
