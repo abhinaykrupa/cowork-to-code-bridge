@@ -298,7 +298,9 @@ def test_process_kill_refuses_pid_1(process_kill_script: Path, tmp_path: Path) -
     assert result.returncode != 0
 
 
-@pytest.mark.parametrize("name", ["launchd", "kernel_task", "systemd", "init", "kernel", "kthreadd"])
+@pytest.mark.parametrize(
+    "name", ["launchd", "kernel_task", "systemd", "init", "kernel", "kthreadd"]
+)
 def test_process_kill_refuses_protected_names(
     process_kill_script: Path, tmp_path: Path, name: str
 ) -> None:
