@@ -119,7 +119,7 @@ if [[ "$KILLED" -eq 0 ]]; then
 fi
 
 sleep 0.5
-REMAINING="$("$BRIDGE_PGREP_CMD" -x "$TARGET" 2>/dev/null | wc -l | tr -d ' ' || echo 0)"
+REMAINING="$({ "$BRIDGE_PGREP_CMD" -x "$TARGET" 2>/dev/null || true; } | wc -l | tr -d ' ')"
 if [[ "$REMAINING" -eq 0 ]]; then
   echo "✓ $KILLED '$TARGET' process(es) terminated"
 else
