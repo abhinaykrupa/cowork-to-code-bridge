@@ -243,42 +243,18 @@ def call_mcp_tool(
         })
         row = json.loads(r["stdout"])["result"]["content"][0]["text"]
     """
-<<<<<<< Updated upstream
     args = ["--server", server, "--method", method]
     if params is not None:
         args += ["--params", json.dumps(params)]
-=======
-    args = ["--server", server, "--method", method]
-    if params is not None:
-        args += ["--params", json.dumps(params)]
->>>>>>> Stashed changes
     r = call_remote("scripts/mcp_proxy.sh", args=args, timeout=timeout,
                     bridge_root=bridge_root)
     # Parse the JSON-RPC response out of stdout for callers that want direct access.
     if r.get("exit_code") == 0 and r.get("stdout"):
         try:
-<<<<<<< Updated upstream
             r["mcp_response"] = json.loads(r["stdout"])
-=======
-            r["mcp_response"] = json.loads(r["stdout"])
->>>>>>> Stashed changes
         except Exception:
             pass
     return r
 
 
-def daemon_alive(bridge_root: Path | str | None = None, ping_timeout: int = 10) -> bool:
-    """Quick health check — submits the ping script and waits for exit_code==0."""
-    try:
-        r = call_remote("scripts/ping.sh", args=[], timeout=ping_timeout,
-                        bridge_root=bridge_root)
-        return r.get("exit_code") == 0
-    except TimeoutError:
-        return False
-
-
-if __name__ == "__main__":
-    # Run directly as a probe: prints LIVE / NOT REACHABLE.
-    alive = daemon_alive(ping_timeout=10)
-    print("BRIDGE LIVE" if alive else "DAEMON NOT REACHABLE")
-    raise SystemExit(0 if alive else 1)
+def daemon_alive(bridge_root: Path | str | None = None, p

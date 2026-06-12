@@ -1540,6 +1540,7 @@ PYEOF
 MCPLIST
 chmod +x "$BRIDGE_ROOT/scripts/mcp_list_servers.sh"
 
+
 c_green "  ✓ scripts installed: ping, hello, run_claude, mac_health, mac_ram, mac_disk, mac_top, mac_network, port_check, docker_ps, docker_logs, pkg_outdated, git_status, list_scripts, env_check, disk_hogs, open_browser, request_cowork, process_kill, mcp_proxy, mcp_register, mcp_list_servers"
 
 # ─── 5b. Fetch the single-file Cowork client (one source of truth) ───────────
