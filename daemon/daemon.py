@@ -552,14 +552,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-                run_one(f, token, terminal, idem_cache)
-        except Exception as e:
-            log(f"! daemon loop error: {e}")
-        time.sleep(POLL_SEC)
-
-    log("daemon exiting")
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
