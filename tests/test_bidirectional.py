@@ -69,13 +69,18 @@ def _read_reply(root: Path, request_id: str) -> dict:
 
 
 def _scan_question(root: Path, cmd_id: str) -> dict | None:
-    """Simulate the interactive poll: find a to_cowork file with parent==cmd_id."""
+    """Simulate the interactive poll: find a to_cowork file with parent==cmd_id.
+
+    Renames the file to .json.answered on detection, matching what the real
+    client does — prevents resume_remote from re-detecting the same question.
+    """
     for f in sorted((root / "to_cowork").glob("*.json")):
         try:
             data = json.loads(f.read_text())
         except (OSError, json.JSONDecodeError):
             continue
         if data.get("parent") == cmd_id:
+            f.rename(f.with_suffix(".json.answered"))
             return data
     return None
 
