@@ -429,6 +429,11 @@ def run_one(cmd_path: Path, token_required: str | None,
         else:
             env[k] = str(v)       # non-security vars: caller wins (e.g. PYTHONPATH)
 
+    # Inject BRIDGE_CMD_ID so scripts (e.g. request_cowork.sh) can correlate
+    # their mid-task requests back to the running task. Always set by daemon —
+    # callers cannot override this (it's not in extra_env path).
+    env["BRIDGE_CMD_ID"] = cmd_id
+
     # ─── in-flight marker + journal: started ──────────────────────────────────
     # Marker is written BEFORE subprocess.run. If we crash between this point
     # and the post-run cleanup, recovery on next startup will see the marker,
@@ -536,6 +541,17 @@ def main() -> int:
         try:
             files = sorted(QUEUE.glob("*.json"))
             for f in files:
+                run_one(f, token, terminal, idem_cache)
+        except Exception as e:
+            log(f"! daemon loop error: {e}")
+        time.sleep(POLL_SEC)
+
+    log("daemon exiting")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
                 run_one(f, token, terminal, idem_cache)
         except Exception as e:
             log(f"! daemon loop error: {e}")

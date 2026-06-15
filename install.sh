@@ -957,11 +957,13 @@ ID="$(date +%s)_$$_${RANDOM}"
 TOKEN=""
 [[ -f "$BRIDGE_ROOT/.env" ]] && TOKEN="$(grep '^BRIDGE_TOKEN=' "$BRIDGE_ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]')"
 TMP="$INBOX/.$ID.json.tmp"; OUT="$INBOX/$ID.json"
-python3 - "$ID" "$REQUEST" "$TOKEN" >"$TMP" <<'PY'
+PARENT="${BRIDGE_CMD_ID:-}"
+python3 - "$ID" "$REQUEST" "$TOKEN" "$PARENT" >"$TMP" <<'PY'
 import json,sys,time
-_id,req,tok=sys.argv[1],sys.argv[2],sys.argv[3]
+_id,req,tok,parent=sys.argv[1],sys.argv[2],sys.argv[3],sys.argv[4]
 o={"id":_id,"request":req,"ts":time.time(),"from":"claude-code"}
 if tok:o["token"]=tok
+if parent:o["parent"]=parent
 print(json.dumps(o))
 PY
 mv "$TMP" "$OUT"; echo "queued request for Cowork: $OUT"
@@ -969,6 +971,7 @@ if [[ "$WAIT" -gt 0 ]]; then
   RF="$REPLIES/$ID.json"; dl=$(( $(date +%s)+WAIT ))
   while [[ "$(date +%s)" -lt "$dl" ]]; do [[ -f "$RF" ]] && { echo "=== reply ==="; cat "$RF"; exit 0; }; sleep 2; done
   echo "no reply within ${WAIT}s (Cowork may not be open); request stays queued." >&2
+  exit 1
 fi
 REQCW
 chmod +x "$BRIDGE_ROOT/scripts/request_cowork.sh"
@@ -1286,7 +1289,40 @@ Pass \`max_budget_usd=2.00\` to stop the agent when that amount is spent.
 The owner can set \`BRIDGE_MAX_BUDGET_USD\` as a global ceiling that can never
 be exceeded regardless of what Cowork sends (effective = min(caller, owner)).
 
-## Step 3 — quick system checks (no agent)
+## Step 3 — streaming + interactive tasks
+
+For long tasks use \`call_remote_streaming\`. Add \`interactive=True\` to handle
+mid-task questions from the script (approval gates, config requests, decision points).
+
+\`\`\`python
+from bridge_client import call_remote_streaming, reply_to_machine, resume_remote
+
+r = call_remote_streaming("scripts/run_claude.sh",
+    args=["Deploy to prod", "/path/to/repo"],
+    timeout=900, interactive=True)
+
+while r.get("state") == "awaiting_reply":
+    # Script paused and asked a question — show it to the user, get answer.
+    answer = input(f"Script asks: {r['question']} > ")
+    reply_to_machine(r["request_id"], answer, bridge_root=r["_bridge_root"])
+    r = resume_remote(r["cmd_id"], r["_deadline"], bridge_root=r["_bridge_root"])
+
+print(r["exit_code"], r["stdout"])
+\`\`\`
+
+Return shape when a question arrives:
+\`\`\`json
+{"state": "awaiting_reply", "cmd_id": "...", "request_id": "...",
+ "question": "Deploy to production?", "from": "claude-code",
+ "_deadline": 1234567890.0, "_bridge_root": "/Users/.../.cowork-to-code-bridge"}
+\`\`\`
+
+On the script side, \`request_cowork.sh "question" --wait 120\` blocks until Cowork
+replies or times out. Timeout exits 1 (not 0) — scripts can detect and handle it.
+Set a generous \`timeout=\` for interactive tasks; the clock doesn't pause while
+waiting for an answer.
+
+## Step 4 — quick system checks (no agent)
 \`call_remote("scripts/mac_health.sh")\` · \`mac_ram.sh\` · \`mac_disk.sh\` · \`mac_top.sh\` · \`mac_network.sh\` · \`port_check.sh\` · \`docker_ps.sh\` · \`docker_logs.sh\` · \`pkg_outdated.sh\` · \`git_status.sh <path>\`
 
 ## Results
