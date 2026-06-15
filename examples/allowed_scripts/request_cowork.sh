@@ -56,12 +56,17 @@ fi
 TMP="$INBOX/.$ID.json.tmp"
 OUT="$INBOX/$ID.json"
 # JSON-escape the request via python (stdlib) for safety with quotes/newlines.
-python3 - "$ID" "$REQUEST" "$TOKEN" >"$TMP" <<'PY'
-import json, sys, time
-_id, req, tok = sys.argv[1], sys.argv[2], sys.argv[3]
+# BRIDGE_CMD_ID is injected by the daemon so mid-task requests can be correlated
+# back to the running task by the Cowork client's interactive poll loop.
+PARENT="${BRIDGE_CMD_ID:-}"
+python3 - "$ID" "$REQUEST" "$TOKEN" "$PARENT" >"$TMP" <<'PY'
+import json, os, sys, time
+_id, req, tok, parent = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 obj = {"id": _id, "request": req, "ts": time.time(), "from": "claude-code"}
 if tok:
     obj["token"] = tok
+if parent:
+    obj["parent"] = parent
 print(json.dumps(obj))
 PY
 mv "$TMP" "$OUT"
@@ -82,5 +87,6 @@ if [[ "$WAIT" -gt 0 ]]; then
   done
   echo "  no reply within ${WAIT}s (Cowork may not be open right now)." >&2
   echo "  the request stays queued at $OUT until a Cowork session picks it up." >&2
-  exit 0
+  # exit 1 on timeout so callers can distinguish "timed out" from "got a reply" (exit 0).
+  exit 1
 fi
