@@ -14,7 +14,7 @@
 
 > ⭐ **If this saves you time, [a star helps others find it](https://github.com/abhinaykrupa/cowork-to-code-bridge/stargazers).** It takes one click.
 
-**Let Claude run code on your real machine — safely — from any Claude chat.**
+**Let Claude run code on your real machine — safely — from any Claude chat. Integrate with Hermes, cron jobs, CI/CD, or any daemon.**
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/abhinaykrupa/cowork-to-code-bridge/main/docs/demo.svg" alt="Cowork hands a 'build me a Flask app' task to Claude Code on your machine; it scaffolds, installs, runs, and verifies it — then reports back." width="100%">

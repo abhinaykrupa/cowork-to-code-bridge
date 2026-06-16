@@ -978,7 +978,44 @@ chmod +x "$BRIDGE_ROOT/scripts/request_cowork.sh"
 mkdir -p "$BRIDGE_ROOT/to_cowork" "$BRIDGE_ROOT/cowork_results"
 chmod 700 "$BRIDGE_ROOT/to_cowork" "$BRIDGE_ROOT/cowork_results" 2>/dev/null || true
 
-chmod +x "$BRIDGE_ROOT"/scripts/mac_*.sh "$BRIDGE_ROOT/scripts/port_check.sh" "$BRIDGE_ROOT/scripts/docker_ps.sh" "$BRIDGE_ROOT/scripts/docker_logs.sh" "$BRIDGE_ROOT/scripts/pkg_outdated.sh" "$BRIDGE_ROOT/scripts/git_status.sh" "$BRIDGE_ROOT/scripts/list_scripts.sh" "$BRIDGE_ROOT/scripts/env_check.sh" "$BRIDGE_ROOT/scripts/disk_hogs.sh" "$BRIDGE_ROOT/scripts/open_browser.sh"
+# escalate_to_claude.sh — hand a task from an external agent (Hermes, cron, etc.)
+# to Claude Code running on this machine.
+cat > "$BRIDGE_ROOT/scripts/escalate_to_claude.sh" <<'ESCL'
+#!/usr/bin/env bash
+# escalate_to_claude.sh — hand a task from Hermes/daemon to Claude Code on this machine.
+# Usage: escalate_to_claude.sh "Debug the API issue" [--wait SECONDS]
+set -euo pipefail
+BRIDGE_ROOT="${BRIDGE_ROOT:-$HOME/.cowork-to-code-bridge}"
+INBOX="$BRIDGE_ROOT/to_cowork"; REPLIES="$BRIDGE_ROOT/cowork_results"
+REQUEST="${1:?usage: escalate_to_claude.sh \"<escalation text>\" [--wait SECONDS]}"; shift || true
+WAIT=0
+if [[ "${1:-}" == "--wait" ]]; then
+  WAIT="${2:-300}"
+  [[ "$WAIT" =~ ^[0-9]+$ ]] || { echo "--wait expects seconds, got: $WAIT" >&2; exit 2; }
+  shift 2 || true
+fi
+mkdir -p "$INBOX" "$REPLIES"; chmod 700 "$INBOX" "$REPLIES" 2>/dev/null || true
+ID="$(date +%s)_$$_${RANDOM}"
+TOKEN=""
+[[ -f "$BRIDGE_ROOT/.env" ]] && TOKEN="$(grep '^BRIDGE_TOKEN=' "$BRIDGE_ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]')"
+TMP="$INBOX/.$ID.json.tmp"; OUT="$INBOX/$ID.json"
+python3 - "$ID" "$REQUEST" "$TOKEN" >"$TMP" <<'PY'
+import json,sys,time,os
+_id,req,tok=sys.argv[1],sys.argv[2],sys.argv[3]
+o={"id":_id,"request":req,"ts":time.time(),"from":"escalation-daemon","escalation_context":{"hostname":os.uname().nodename,"user":os.getenv("USER","unknown"),"cwd":os.getcwd()}}
+if tok:o["token"]=tok
+print(json.dumps(o))
+PY
+mv "$TMP" "$OUT"; echo "escalation queued for Claude Code: $OUT"
+if [[ "$WAIT" -gt 0 ]]; then
+  RF="$REPLIES/$ID.json"; dl=$(( $(date +%s)+WAIT ))
+  while [[ "$(date +%s)" -lt "$dl" ]]; do [[ -f "$RF" ]] && { echo "=== Claude Code reply ==="; cat "$RF"; exit 0; }; sleep 2; done
+  echo "no reply within ${WAIT}s; escalation stays queued." >&2
+fi
+ESCL
+chmod +x "$BRIDGE_ROOT/scripts/escalate_to_claude.sh"
+
+chmod +x "$BRIDGE_ROOT"/scripts/mac_*.sh "$BRIDGE_ROOT/scripts/port_check.sh" "$BRIDGE_ROOT/scripts/docker_ps.sh" "$BRIDGE_ROOT/scripts/docker_logs.sh" "$BRIDGE_ROOT/scripts/pkg_outdated.sh" "$BRIDGE_ROOT/scripts/git_status.sh" "$BRIDGE_ROOT/scripts/list_scripts.sh" "$BRIDGE_ROOT/scripts/env_check.sh" "$BRIDGE_ROOT/scripts/disk_hogs.sh" "$BRIDGE_ROOT/scripts/open_browser.sh" "$BRIDGE_ROOT/scripts/escalate_to_claude.sh"
 
 # process_kill.sh — terminate a named process or PID from Cowork.
 # Safety guards: refuses PID ≤ 10, refuses protected names (launchd/kernel_task/

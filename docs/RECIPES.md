@@ -185,3 +185,89 @@ Open http://localhost:3000 in my default browser.
 - Fixed script; does not start the server — combine with the dev-server recipe if
   you need both.
 - Rejects unsafe URLs (`file://`, bare paths) by design.
+
+---
+
+## Escalate from Hermes / Open Claw to Claude Code
+
+**Outside a Cowork chat?** Run Hermes (or any external agent/daemon) on your machine
+and escalate complex tasks to Claude Code running in your subscription.
+
+**Hermes daemon detects an issue and needs Claude Code to debug it:**
+
+```bash
+# From a Hermes agent or cron job on your machine:
+escalate_to_claude.sh \
+  "Debug why the FastAPI health check is failing (check logs in /var/log/api.log, \
+   fix the code in /Users/me/projects/api, restart the service, verify /health returns 200)" \
+  --wait 300
+```
+
+**What the bridge does:**
+
+- Writes a structured request to `BRIDGE_ROOT/to_cowork/` with metadata (who asked,
+  when, deadline).
+- Claude Code (in your Cowork subscription, if one is open) notices the request the
+  next time it checks its inbox.
+- Agent reads the request, debugs the issue, writes the result (fixed code, restart
+  command, verification screenshot) to `cowork_results/`.
+- The escalate script polls for the reply and returns it to Hermes (which can then
+  apply the fix, restart, and verify).
+- No token needed — uses your authenticated Claude Code session on the same machine.
+
+**Why this matters:**
+
+- **No API keys.** Hermes doesn't embed a token or call a headless API. It uses the
+  bridge file-queue.
+- **Full Claude Code context.** The agent can read your repos, run your tools, hit
+  your local MCPs, mount your files — everything Claude Code can do.
+- **Async handoff.** Hermes doesn't block waiting for an answer. It drops the request
+  and moves on; the agent picks it up when ready.
+- **Your subscription.** Uses your Claude Code plan, not Hermes' cloud costs.
+
+**Integration example (Hermes + escalation daemon):**
+
+```python
+# In your Hermes agent loop:
+if error_severity > threshold:
+    # Hand off to Claude Code for advanced debugging
+    result = subprocess.run([
+        "escalate_to_claude.sh",
+        f"Debug: {error_message}. Logs at {log_path}. Fix and restart {service_name}.",
+        "--wait", "600"
+    ], capture_output=True, text=True)
+    
+    if result.returncode == 0:
+        fix_output = json.loads(result.stdout)
+        # Apply the fix, restart, continue
+        apply_fix(fix_output)
+    else:
+        # Escalation timed out; Hermes decides next step
+        log_escalation_failure(error_message)
+```
+
+---
+
+## Connect any external tool (CI/CD, cron, webhook) to Claude Code
+
+**Trigger Claude Code from outside Cowork:**
+
+```bash
+# From a GitHub Actions workflow, cron job, or webhook:
+request_cowork.sh "Summarize the latest test failures and suggest fixes" --wait 300
+```
+
+The request sits in the bridge folder. When a Cowork chat is open and the agent
+checks its inbox (Step 4 of the skill), it picks up the request, acts on it, and
+writes the reply back. The caller polls for the result.
+
+**Patterns:**
+- **CI/CD escalation.** Build fails → CI posts to bridge → Claude Code debugs → CI
+  resumes with the fix.
+- **Cron job escalation.** Scheduled health check runs → alerts Claude Code → agent
+  debugs and fixes → cron logs the result.
+- **Webhook handler.** Incident alert arrives → POST to `request_cowork.sh` wrapper →
+  Claude Code investigates → response sent to incident tracker.
+
+See **[examples/allowed_scripts/request_cowork.sh](examples/allowed_scripts/request_cowork.sh)**
+for the full tool and `--wait` semantics.
