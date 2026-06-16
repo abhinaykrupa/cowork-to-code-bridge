@@ -8,6 +8,7 @@ Coverage:
   - mcp_proxy.sh: unknown server returns error JSON (exit 0), exits 0 always,
                   valid response from a fake stdio MCP echo server
 """
+from __future__ import annotations
 
 import json
 import os
