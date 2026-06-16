@@ -12,6 +12,57 @@ The cowork-to-code-bridge now supports **bidirectional escalation** from externa
 
 ## What's New
 
+### 0. MCP Server — Direct Integration (NEW)
+
+**Hermes/Open Claw can now use Claude Code subscription via MCP without needing a user's Cowork session open.**
+
+The bridge daemon exposes an **MCP (Model Context Protocol) server** that agents can connect to directly. This is the ultimate "bypass strategy" — agents treat Claude Code as a remote model provider.
+
+**Usage (Hermes config):**
+
+```json
+{
+  "providers": {
+    "claude-code-bridge": {
+      "type": "mcp",
+      "command": "cowork-to-code-bridge-mcp",
+      "args": ["--stdio"],
+      "env": {
+        "BRIDGE_ROOT": "$HOME/.cowork-to-code-bridge"
+      }
+    }
+  }
+}
+```
+
+**Hermes agent code:**
+
+```python
+# Hermes can now escalate as if calling a remote API
+response = hermes.escalate(
+    tool="escalate_to_claude",
+    request="Debug the API health check and fix it",
+    wait_seconds=600
+)
+# result = {"status": "completed", "result": {...}}
+```
+
+**Why this matters:**
+- ✅ No user subscription needed to be open
+- ✅ Daemon runs 24/7; multiple agents escalate concurrently
+- ✅ Full Claude Code capabilities (your repos, shell, MCPs)
+- ✅ Uses your Max plan billing (no separate costs)
+- ✅ Better integration with third-party orchestration
+
+**MCP tools available:**
+1. **escalate_to_claude** — hand task to Claude Code, get result
+2. **run_script** — execute whitelisted script directly
+3. **list_bridge_scripts** — discover available scripts
+
+See **[examples/hermes-mcp-config.json](examples/hermes-mcp-config.json)** and **[examples/openclaw-mcp-config.json](examples/openclaw-mcp-config.json)** for full configs.
+
+---
+
 ### 1. `escalate_to_claude.sh` — Hermes Integration Script
 
 Located in `examples/allowed_scripts/escalate_to_claude.sh`. This wrapper helps external agents (especially Hermes) send requests to Claude Code.
@@ -69,7 +120,69 @@ No asks of those repos. Just visibility + mutual linking.
 
 ---
 
-## How It Works (4-Leg Loop)
+## Architecture: Two Approaches
+
+### Approach 1: MCP Server (Recommended for Hermes/Open Claw)
+
+Agent connects directly to `cowork-to-code-bridge-mcp` (daemon runs 24/7).
+
+```
+Hermes Agent    MCP Server           Bridge Daemon        Claude Code
+     │              │                      │                   │
+     │─ tools/call──▶ escalate_to_claude  │                   │
+     │              │─ write to inbox ────▶ to_cowork/        │
+     │              │                      │                   │
+     │              │                      │◀─ agent checks ───│
+     │              │                      │                   │
+     │              │                      │  reads request    │
+     │              │                      │  debugs / fixes ─▶ agent works
+     │              │                      │                   │
+     │              │                      │ polls for reply ◀─│
+     │              │◀─ read from results ─│ cowork_results/   │
+     │◀─ result ────│                      │                   │
+     │              │                      │                   │
+```
+
+**Advantages:**
+- Agent doesn't need user's Cowork session open
+- Daemon runs 24/7
+- Multiple concurrent escalations
+- Hermes/Open Claw treat it as a model provider (auto-discovery)
+
+**Best for:** Scheduled workflows, CI/CD, multi-tenant scenarios
+
+---
+
+### Approach 2: Escalation Script (Works when Cowork is open)
+
+Agent calls `escalate_to_claude.sh` to hand off work.
+
+```
+Hermes/Daemon       Script             Bridge          Claude Code
+     │         (escalate_to_claude.sh)    │            (Cowork open)
+     │─ run script──▶ write to inbox ────▶ to_cowork/  │
+     │              │                      │             │
+     │              │                      │◀─ agent ────│
+     │              │                      │ checks inbox
+     │              │                      │             │
+     │              │                      │  reads req  │
+     │              │                      │  works ────▶ full context
+     │              │                      │             │
+     │  polls ──────▶ read from results ──│ writes result◀─
+     │◀─ result ────│                      │             │
+     │              │                      │             │
+```
+
+**Advantages:**
+- No separate MCP server to run
+- Works with existing `request_cowork.sh` pattern
+- Simple shell script (no new dependencies)
+
+**Best for:** One-off escalations when Cowork is open
+
+---
+
+## How It Works (4-Leg Loop) — Script Approach
 
 ```
 Agent (Hermes)          Bridge               Claude Code (Cowork)
@@ -174,46 +287,101 @@ The bridge is already shipping:
 
 ---
 
+## Comparison: MCP vs. Escalation Script
+
+| Factor | MCP Server | Escalation Script |
+|---|---|---|
+| **Setup** | `cowork-to-code-bridge-mcp --stdio` in Hermes config | Use `escalate_to_claude.sh` directly |
+| **Dependencies** | Zero new deps (Python stdio) | bash + curl (already on macOS/Linux) |
+| **Cowork required?** | No (daemon 24/7) | Yes (Cowork must be open) |
+| **Concurrency** | Multiple agents simultaneously | One at a time |
+| **Best for** | Scheduled workflows, CI/CD, multi-tenant | One-off escalations, interactive |
+| **Latency** | Seconds to minutes (async) | Seconds to minutes (async) |
+| **Discovery** | Auto (MCP tools/list) | Manual (hardcoded script name) |
+
+**Recommendation:** Start with MCP if you want production integration; use escalation script for testing.
+
+---
+
 ## Implementation Checklist (All Done ✅)
 
 | Item | Status | Details |
 |---|---|---|
+| **MCP Server** | ✅ Done | cowork_to_code_bridge/mcp_server.py (JSONRPC 2.0 stdio) |
+| **MCP Entry Point** | ✅ Done | Added to pyproject.toml: cowork-to-code-bridge-mcp |
+| **MCP Configs** | ✅ Done | Hermes + Open Claw example configs (examples/hermes-mcp-config.json) |
+| **MCP Tests** | ✅ Done | Comprehensive test suite (initialize, tools, escalate, run_script) |
 | `escalate_to_claude.sh` script | ✅ Done | examples/allowed_scripts/, installed by install.sh |
-| RECIPES.md sections | ✅ Done | Hermes example + external tool patterns |
+| RECIPES.md sections | ✅ Done | Hermes example + external tool patterns + MCP section |
 | README update | ✅ Done | Hero pitch includes "Hermes, cron, CI/CD" |
 | HERMES_PITCH.md | ✅ Done | Detailed use case + billing comparison |
 | docs/GITHUB_ISSUES_MANUAL.md | ✅ Done | Templates for Hermes + Open Claw |
+| EXTERNAL_AGENT_INTEGRATION.md | ✅ Done | Comprehensive guide (MCP + escalation script approaches) |
 | install.sh wiring | ✅ Done | escalate_to_claude.sh in scripts/ |
-| Commit pushed to main | ✅ Done | `f978119` + `e457b81` |
+| Commits pushed to main | ✅ Done | 3 commits (features + MCP server + docs) |
 
 ---
 
 ## Next Steps
 
-### 1. **Manual GitHub Issue Posting** (User Action)
+### 1. **Test MCP Server Locally** (Integration Testing)
+
+With the MCP server now implemented:
+
+```bash
+# Terminal 1: Start MCP server (listens on stdio)
+cowork-to-code-bridge-mcp --stdio
+
+# Terminal 2: Send a test request
+python3 <<'EOF'
+import json
+import subprocess
+
+# Start MCP server and send initialize
+proc = subprocess.Popen(
+    ["cowork-to-code-bridge-mcp", "--stdio"],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    text=True
+)
+
+# Send initialize
+req = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+proc.stdin.write(json.dumps(req) + "\n")
+proc.stdin.flush()
+
+# Read response
+resp = proc.stdout.readline()
+print(json.loads(resp))
+
+proc.terminate()
+EOF
+```
+
+### 2. **Test Escalation through MCP** (With Cowork Open)
+
+- Open a Cowork chat
+- Connect the bridge (standard setup)
+- Send an escalation via MCP: `escalate_to_claude` tool
+- Verify Claude Code agent picks it up from inbox
+- Verify reply is written to cowork_results/
+- Verify MCP server returns the result
+
+### 3. **Wire into Hermes** (Optional)
+
+Once tested:
+- Use `examples/hermes-mcp-config.json` as template
+- Point Hermes MCP provider to `cowork-to-code-bridge-mcp --stdio`
+- Hermes can now escalate work directly
+
+### 4. **Manual GitHub Issue Posting** (Community)
 
 See `docs/GITHUB_ISSUES_MANUAL.md` for exact issue titles + bodies.
 
-- **Hermes repo**: Propose bridge as alternative to API keys for Max subscription
-- **Open Claw repo**: Propose bridge as token-free Claude Code access
+- **Hermes repo**: Propose MCP as primary integration method
+- **Open Claw repo**: Propose MCP for direct Claude Code access
 
 No code changes needed in those repos; just documentation links.
-
-### 2. **Test with Your Daemon** (Integration Testing)
-
-- Spin up your escalation daemon (which started this whole project)
-- Have it call `escalate_to_claude.sh` with a test request
-- Verify Claude Code agent picks it up and replies
-- Verify daemon resumes with the result
-
-This validates the 4-leg loop end-to-end.
-
-### 3. **Monitor Feedback** (Optional)
-
-If Hermes/Open Claw maintainers respond, you have:
-- Clear architecture docs (flow diagrams, examples)
-- Working code (no new dependencies)
-- Production tests (idempotency, crash resilience, bidirectional)
 
 ---
 
