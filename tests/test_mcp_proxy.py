@@ -11,10 +11,10 @@ Coverage:
 
 import json
 import os
-from pathlib import Path
 import re
 import subprocess
 import textwrap
+from pathlib import Path
 
 
 REPO = Path(__file__).parent.parent
