@@ -28,6 +28,7 @@ Or run it directly as a probe:
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import time
@@ -438,14 +439,8 @@ def call_mcp_tool(
     r = call_remote("scripts/mcp_proxy.sh", args=args, timeout=timeout,
                     bridge_root=bridge_root)
     if r.get("exit_code") == 0 and r.get("stdout"):
-        try:
-<<<<<<< Updated upstream
+        with contextlib.suppress(Exception):
             r["mcp_response"] = json.loads(r["stdout"])
-=======
-            r["mcp_response"] = json.loads(r["stdout"])
->>>>>>> Stashed changes
-        except Exception:
-            pass
     return r
 
 

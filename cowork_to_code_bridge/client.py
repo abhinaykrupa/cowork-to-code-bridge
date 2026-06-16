@@ -25,6 +25,7 @@ Configuration (env vars):
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import time
@@ -380,6 +381,7 @@ def call_remote_streaming(
     on_status=None,
     plan: str | None = None,
     max_budget_usd: float | None = None,
+    interactive: bool = False,
 ) -> dict[str, Any]:
     """Like call_remote, but streams live output while the task runs.
 
@@ -541,17 +543,15 @@ def call_mcp_tool(
     r = call_remote("scripts/mcp_proxy.sh", args=args, timeout=timeout,
                     bridge_root=bridge_root)
     if r.get("exit_code") == 0 and r.get("stdout"):
-        try:
+        with contextlib.suppress(Exception):
             r["mcp_response"] = json.loads(r["stdout"])
-        except Exception:
-            pass
     return r
 
 
 def reply_to_machine(
     request_id: str,
     text: str,
-    bridge_root: "Path | str | None" = None,
+    bridge_root: Path | str | None = None,
 ) -> None:
     """Write a reply to a mid-task question raised by a running script.
 
@@ -580,7 +580,7 @@ def resume_remote(
     on_progress=None,
     on_status=None,
     interactive: bool = True,
-    bridge_root: "Path | str | None" = None,
+    bridge_root: Path | str | None = None,
 ) -> dict:
     """Re-enter the wait loop for a task after answering its question.
 
