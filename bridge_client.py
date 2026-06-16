@@ -28,6 +28,7 @@ Or run it directly as a probe:
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import time
@@ -272,10 +273,8 @@ def call_mcp_tool(
                     bridge_root=bridge_root)
     # Parse the JSON-RPC response out of stdout for callers that want direct access.
     if r.get("exit_code") == 0 and r.get("stdout"):
-        try:
+        with contextlib.suppress(Exception):
             r["mcp_response"] = json.loads(r["stdout"])
-        except Exception:
-            pass
     return r
 
 
