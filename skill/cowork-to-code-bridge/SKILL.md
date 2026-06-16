@@ -78,6 +78,7 @@ r = call_remote(
     args=["Refactor the auth module", "/path/to/repo"],
     timeout=300, idempotency_key="refactor-auth-1",
     max_budget_usd=2.00,   # agent stops if it hits $2.00 before finishing
+<<<<<<< ours
 )
 ```
 
@@ -97,6 +98,27 @@ r = call_remote(
 )
 ```
 
+=======
+)
+```
+
+The owner can set `BRIDGE_MAX_BUDGET_USD=5.00` in their launchd/systemd env as a
+global ceiling — any per-task budget above the ceiling is silently capped. This
+protects against runaway tasks from non-technical users who don't understand API
+costs. If neither is set, no spend ceiling is enforced (Claude CLI default).
+
+For tasks that only need read access, request a tighter permission scope:
+
+```python
+r = call_remote(
+    "scripts/run_claude.sh",
+    args=["Summarise the last 10 commits", "/Users/<them>/projects/app"],
+    timeout=120, idempotency_key="summarise-1",
+    permission_mode="plan",   # read-only: no edits, no shell commands
+)
+```
+
+>>>>>>> theirs
 Valid `permission_mode` values (least → most permissive): `"plan"`, `"acceptEdits"`,
 `"bypassPermissions"`. The daemon enforces the owner's `BRIDGE_PERMISSION_CEILING`
 \u2014 a mode above the ceiling is rejected before any script runs. Omit `permission_mode`
@@ -165,6 +187,7 @@ For simple, fast system queries, call a ready-made script directly:
 For a repeatable custom action, help the user save a small script in
 `~/.cowork-to-code-bridge/scripts/` on their Mac, then call it by name.
 
+<<<<<<< ours
 ## Step 4 — reach local MCP servers (no HTTPS tunnel needed)
 
 Claude Cowork only permits MCP connectors via public HTTPS endpoints. If you have
@@ -259,6 +282,8 @@ elif r.get("exit_code") != 0:
 ## Step 6 — check the inbox (reverse direction: Claude Code → Cowork)
 ## Step 5 — cross-surface MCP audit
 
+=======
+>>>>>>> theirs
 ### Cross-surface MCP audit
 
 There is no built-in Anthropic tool to compare MCPs registered in local Claude
@@ -288,6 +313,10 @@ this Cowork session. Any MCP present locally but absent here is a gap —
 the user may need to install the corresponding Cowork plugin or expose the
 MCP via the bridge.
 
+<<<<<<< ours
+=======
+## Step 4 — check the inbox (reverse direction: Claude Code → Cowork)
+>>>>>>> theirs
 
 Claude Code on the user's machine can leave requests for a Cowork session in
 `BRIDGE_ROOT/to_cowork/`. When the user says "check my inbox", "any requests
