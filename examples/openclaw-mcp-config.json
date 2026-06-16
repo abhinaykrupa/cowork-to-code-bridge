@@ -1,0 +1,16 @@
+{
+  "comment": "Open Claw + Claude Code Bridge MCP Configuration",
+  "comment_1": "This enables Open Claw to use Claude Code subscription via the bridge.",
+  "comment_2": "Install bridge: curl -fsSL https://raw.githubusercontent.com/abhinaykrupa/cowork-to-code-bridge/main/install.sh | bash",
+  "comment_3": "Then add this provider to your Open Claw config.",
+  "providers": {
+    "claude-code-bridge": {
+      "type": "mcp",
+      "command": "cowork-to-code-bridge-mcp",
+      "args": ["--stdio"],
+      "env": {
+        "BRIDGE_ROOT": "$HOME/.cowork-to-code-bridge"
+      }
+    }
+  }
+}
