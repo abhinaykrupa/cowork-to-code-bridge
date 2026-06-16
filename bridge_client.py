@@ -217,6 +217,7 @@ def call_mcp_tool(
     params: dict | None = None,
     timeout: int = 60,
     bridge_root: str | None = None,
+    mcp_proxy_url: str | None = None,
 ) -> dict:
     """Call a tool on a local stdio MCP server via the bridge proxy.
 
@@ -246,6 +247,8 @@ def call_mcp_tool(
     args = ["--server", server, "--method", method]
     if params is not None:
         args += ["--params", json.dumps(params)]
+    if mcp_proxy_url is not None:
+        args += ["--proxy-url", mcp_proxy_url]
     r = call_remote("scripts/mcp_proxy.sh", args=args, timeout=timeout,
                     bridge_root=bridge_root)
     # Parse the JSON-RPC response out of stdout for callers that want direct access.
@@ -257,4 +260,17 @@ def call_mcp_tool(
     return r
 
 
-def daemon_alive(bridge_root: Path | str | None = None, p
+def daemon_alive(bridge_root=None, ping_timeout=10):
+    """Quick health check — submits the ping script and waits for exit_code==0."""
+    try:
+        r = call_remote("scripts/ping.sh", args=[], timeout=ping_timeout,
+                        bridge_root=bridge_root)
+        return r.get("exit_code") == 0
+    except TimeoutError:
+        return False
+
+
+if __name__ == "__main__":
+    alive = daemon_alive(ping_timeout=10)
+    print("BRIDGE LIVE" if alive else "DAEMON NOT REACHABLE")
+    raise SystemExit(0 if alive else 1)

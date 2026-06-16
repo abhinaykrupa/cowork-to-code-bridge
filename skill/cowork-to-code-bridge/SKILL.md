@@ -46,8 +46,8 @@ permission to see the folder.
   ```
 
   It takes ~30s, sets up the connection, and survives reboots. After they say
-  it's done, re-run Step 1. (macOS, Linux with systemd or manual path, and WSL2
-  with systemd are supported. Native Windows without WSL: use WSL2 — guide:
+  it's done, re-run Step 1. (macOS, Linux, and WSL2 with systemd are supported.
+  If they use native Windows without WSL, tell them to install via WSL2 — guide:
   https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/docs/WSL.md)
 
 ## Step 2 — hand a task to Claude Code on the Mac (the main use)
@@ -70,27 +70,37 @@ print(r["stdout"])   # what the local Claude Code agent did + reported
 can edit/commit/push, so if the connection drops and you retry, the key makes the
 daemon return the cached result instead of running the agent twice.
 
-### Per-task cost cap (`max_budget_usd`)
-
-Long Claude Code tasks can drift. Pass `max_budget_usd` to set a hard spend
-ceiling — the agent stops and reports what it finished when the budget is hit:
+**Pass `max_budget_usd` to cap API spend for a task:**
 
 ```python
 r = call_remote(
     "scripts/run_claude.sh",
     args=["Refactor the auth module", "/path/to/repo"],
-    timeout=600,
-    idempotency_key="refactor-auth-1",
-    max_budget_usd=2.00,   # stop when this is spent, no matter what
+    timeout=300, idempotency_key="refactor-auth-1",
+    max_budget_usd=2.00,   # agent stops if it hits $2.00 before finishing
 )
 ```
 
-The Mac owner can also set `BRIDGE_MAX_BUDGET_USD=5.00` in their launchd/systemd
-env as a **global ceiling** — any per-task budget above that is silently capped.
-If the owner sets 5.00 and Cowork sends 10.00, the effective limit is $5. This
-makes the bridge safe to share: a runaway "rewrite everything" task can't cost
-more than whatever the owner decided.  `max_budget_usd` works with both
-`call_remote` and `call_remote_streaming`.
+The owner can set `BRIDGE_MAX_BUDGET_USD=5.00` in their launchd/systemd env as a
+global ceiling — any per-task budget above the ceiling is silently capped. This
+protects against runaway tasks from non-technical users who don't understand API
+costs. If neither is set, no spend ceiling is enforced (Claude CLI default).
+
+For tasks that only need read access, request a tighter permission scope:
+
+```python
+r = call_remote(
+    "scripts/run_claude.sh",
+    args=["Summarise the last 10 commits", "/Users/<them>/projects/app"],
+    timeout=120, idempotency_key="summarise-1",
+    permission_mode="plan",   # read-only: no edits, no shell commands
+)
+```
+
+Valid `permission_mode` values (least → most permissive): `"plan"`, `"acceptEdits"`,
+`"bypassPermissions"`. The daemon enforces the owner's `BRIDGE_PERMISSION_CEILING`
+\u2014 a mode above the ceiling is rejected before any script runs. Omit `permission_mode`
+to use the owner's global `CLAUDE_FLAGS` unchanged.
 
 ### Long tasks — stream live progress (don't wait blind)
 
@@ -112,29 +122,28 @@ Tell the user what's happening as chunks arrive (e.g. "installing deps…",
 "running tests…") rather than leaving them waiting. Same final result + same
 idempotency guarantees as `call_remote`.
 
-### Live status ticker (spinner + elapsed time)
+### Live status ticker (spinner line, no log dump)
 
-The daemon writes `progress/<id>.status.json` every ~2 s with `{"elapsed_s", "last_line", "state"}`.
-Pass `on_status` to get a compact ticker that doesn't flood the log:
+For a clean single-line status instead of raw log output, use `on_status`:
 
 ```python
 def on_status(s):
     SPINNER = "⣾⣽⣻⢿⡿⣟⣯⣷"
     tick = s["elapsed_s"] % len(SPINNER)
-    print(f"\r  {SPINNER[tick]} {s['last_line'][:60]}… ({s['elapsed_s']}s)",
-          end="", flush=True)
+    print(f"\r  {SPINNER[tick]} {s['last_line'][:60]}… ({s['elapsed_s']}s)", end="", flush=True)
 
 r = call_remote_streaming(
     "scripts/run_claude.sh",
-    args=["Build the app", "/Users/<them>/projects/app"],
-    timeout=900, on_status=on_status,
+    args=["Run the tests and fix failures", "/Users/<them>/projects/repo"],
+    timeout=600, idempotency_key="test-run-1",
+    on_status=on_status,
 )
-print()   # newline after the spinner
-print(r["exit_code"])
+print()  # newline after spinner
+print(r["exit_code"]); print(r["stdout"])
 ```
 
-`on_status` and `on_progress` can be combined — `on_status` fires ~every 2 s
-for the ticker while `on_progress` captures the full raw log.
+`on_status` is called every ~2s with `{"elapsed_s": int, "last_line": str, "state": "running"|"done"|"error"}`.
+`on_progress` and `on_status` are independent — use either or both.
 
 ## Step 3 — quick fixed actions (no agent needed)
 
@@ -142,24 +151,16 @@ For simple, fast system queries, call a ready-made script directly:
 
 | User asks | Call |
 |---|---|
-| "check my Mac's health" | `call_remote("scripts/mac_health.sh")` — text; add `args=["--json"]` for parsed output |
+| "check my Mac's health" | `call_remote("scripts/mac_health.sh")` |
 | "how much RAM / memory?" | `call_remote("scripts/mac_ram.sh")` |
 | "disk space?" | `call_remote("scripts/mac_disk.sh")` |
 | "what's using CPU?" | `call_remote("scripts/mac_top.sh")` |
 | "network status?" | `call_remote("scripts/mac_network.sh")` |
 | "what's listening on port 3000?" | `call_remote("scripts/port_check.sh", args=["3000"])` |
 | "what Docker containers are running?" | `call_remote("scripts/docker_ps.sh")` |
-| "show logs for container X" / "docker logs for my-app" | `call_remote("scripts/docker_logs.sh", args=["<container>", "50"])` |
 | "what's the git status of ~/myproject?" | `call_remote("scripts/git_status.sh", args=["/path/to/repo"])` |
 | "any outdated packages?" | `call_remote("scripts/pkg_outdated.sh")` |
-| "what scripts can you run on my machine?" | `call_remote("scripts/list_scripts.sh")` |
-| "show my machine's env / PATH / claude CLI" | `call_remote("scripts/env_check.sh")` |
-| "what's eating disk in ~/Downloads?" | `call_remote("scripts/disk_hogs.sh", args=["~/Downloads", "15"])` |
-| "kill process rails" / "stop PID 1234" | `call_remote("scripts/process_kill.sh", args=["rails"])` or `args=["1234"]` |
-| "open localhost:3000 in my browser" | `call_remote("scripts/open_browser.sh", args=["http://localhost:3000"])` |
-
-**Tip:** if you're unsure what's available, call `list_scripts.sh` first — it
-returns every script the bridge can run, with a one-line description of each.
+| "what MCPs do you have on your machine?" | `call_remote("scripts/mcp_audit.sh")` |
 
 For a repeatable custom action, help the user save a small script in
 `~/.cowork-to-code-bridge/scripts/` on their Mac, then call it by name.
@@ -255,7 +256,38 @@ elif r.get("exit_code") != 0:
 `mcp_proxy.sh` always exits 0 — MCP-level errors appear inside the JSON under
 `r["mcp_response"]["error"]`, not the process exit code.
 
-## Step 5 — check the inbox (reverse direction: Claude Code → Cowork)
+## Step 6 — check the inbox (reverse direction: Claude Code → Cowork)
+## Step 5 — cross-surface MCP audit
+
+### Cross-surface MCP audit
+
+There is no built-in Anthropic tool to compare MCPs registered in local Claude
+Code vs what a Cowork session can reach (ref: anthropics/claude-code#56353).
+`mcp_audit.sh` captures the local side so you can diff it here:
+
+```python
+import json
+
+r = call_remote("scripts/mcp_audit.sh")
+local = json.loads(r["stdout"])
+
+print(f"Machine: {local['hostname']}  (Claude Code {local['claude_version']})")
+print(f"Registered MCPs: {local.get('mcp_count', '?')}")
+
+# If structured JSON is available (Claude Code >= recent version):
+for mcp in local.get("mcps", []):
+    print(f"  [{mcp.get('scope','?')}] {mcp.get('name','?')}  type={mcp.get('type','?')}")
+
+# If older Claude Code (plain-text fallback):
+if "mcps_raw" in local:
+    print(local["mcps_raw"])
+```
+
+Compare the names in `local["mcps"]` against the connectors/plugins visible in
+this Cowork session. Any MCP present locally but absent here is a gap —
+the user may need to install the corresponding Cowork plugin or expose the
+MCP via the bridge.
+
 
 Claude Code on the user's machine can leave requests for a Cowork session in
 `BRIDGE_ROOT/to_cowork/`. When the user says "check my inbox", "any requests
