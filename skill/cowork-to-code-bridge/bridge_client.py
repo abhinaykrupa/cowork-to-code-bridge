@@ -383,6 +383,7 @@ def call_mcp_tool(
     params: dict | None = None,
     timeout: int = 60,
     bridge_root: str | None = None,
+    mcp_proxy_url: str | None = None,
 ) -> dict:
     """Call a tool on a local stdio MCP server via the bridge proxy.
 
@@ -414,11 +415,8 @@ def call_mcp_tool(
     args = ["--server", server, "--method", method]
     if params is not None:
         args += ["--params", json.dumps(params)]
-=======
-    args = ["--server", server, "--method", method]
-    if params is not None:
-        args += ["--params", json.dumps(params)]
->>>>>>> Stashed changes
+    if mcp_proxy_url is not None:
+        args += ["--proxy-url", mcp_proxy_url]
     r = call_remote("scripts/mcp_proxy.sh", args=args, timeout=timeout,
                     bridge_root=bridge_root)
     if r.get("exit_code") == 0 and r.get("stdout"):
@@ -433,7 +431,7 @@ def call_mcp_tool(
     return r
 
 
-def daemon_alive(bridge_root: Path | str | None = None, ping_timeout: int = 10) -> bool:
+def daemon_alive(bridge_root=None, ping_timeout=10):
     """Quick health check — submits the ping script and waits for exit_code==0."""
     try:
         r = call_remote("scripts/ping.sh", args=[], timeout=ping_timeout,
@@ -443,66 +441,7 @@ def daemon_alive(bridge_root: Path | str | None = None, ping_timeout: int = 10) 
         return False
 
 
-def post_message_to_cowork(
-    message_type: str,
-    content: str,
-    parent_task_id: str | None = None,
-    bridge_root: Path | str | None = None,
-) -> str:
-    """Post a message from Claude Code back to Cowork (bidirectional communication)."""
-    root = Path(bridge_root) if bridge_root else _resolve_bridge_root()
-    to_cowork = root / "to_cowork"
-    to_cowork.mkdir(parents=True, exist_ok=True)
-
-    request_id = f"msg_{int(time.time())}_{uuid.uuid4().hex[:8]}"
-    message = {
-        "id": request_id,
-        "type": message_type,
-        "content": content,
-        "ts": time.time(),
-        "from": "claude-code",
-    }
-    if parent_task_id:
-        message["parent"] = parent_task_id
-
-    msg_file = to_cowork / f"{request_id}.json"
-    tmp = msg_file.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(message))
-    tmp.rename(msg_file)
-
-    return request_id
-
-
-def detect_messages_from_claude_code(
-    parent_task_id: str | None = None,
-    bridge_root: Path | str | None = None,
-) -> list[dict[str, Any]]:
-    """Detect and retrieve messages posted by Claude Code (bidirectional communication)."""
-    root = Path(bridge_root) if bridge_root else _resolve_bridge_root()
-    to_cowork = root / "to_cowork"
-
-    if not to_cowork.exists():
-        return []
-
-    messages = []
-    for msg_file in sorted(to_cowork.glob("*.json")):
-        if msg_file.suffix == ".answered":
-            continue
-        try:
-            msg = json.loads(msg_file.read_text())
-        except (OSError, json.JSONDecodeError):
-            continue
-
-        if parent_task_id and msg.get("parent") != parent_task_id:
-            continue
-
-        messages.append(msg)
-
-    return messages
-
-
 if __name__ == "__main__":
-    # Run directly as a probe: prints LIVE / NOT REACHABLE.
     alive = daemon_alive(ping_timeout=10)
     print("BRIDGE LIVE" if alive else "DAEMON NOT REACHABLE")
     raise SystemExit(0 if alive else 1)
