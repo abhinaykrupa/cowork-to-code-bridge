@@ -1,0 +1,27 @@
+{
+  "_comment": "Hermes Agent MCP configuration for cowork-to-code-bridge.",
+  "_usage": [
+    "Copy this file to ~/.hermes/mcp.json (or wherever Hermes reads MCP config).",
+    "Then in Hermes: hermes --mcp-config ~/.hermes/mcp.json",
+    "Or set HERMES_MCP_CONFIG=~/.hermes/mcp.json in your shell.",
+    "",
+    "Prerequisites:",
+    "  1. pip install -e /path/to/cowork-to-code-bridge  (installs cowork-to-code-bridge-mcp)",
+    "  2. cowork-to-code-bridge-selfcheck                (verify daemon is running)",
+    "",
+    "Tools available once connected:",
+    "  escalate_to_claude — delegate a task to your local Claude Code agent",
+    "  call_remote        — run any whitelisted script via the bridge",
+    "  daemon_alive       — health-check the daemon",
+    "  call_mcp_tool      — proxy to a registered stdio MCP server on the host"
+  ],
+  "mcpServers": {
+    "cowork": {
+      "command": "cowork-to-code-bridge-mcp",
+      "args": ["--stdio"],
+      "env": {
+        "BRIDGE_ROOT": "${BRIDGE_ROOT}"
+      }
+    }
+  }
+}

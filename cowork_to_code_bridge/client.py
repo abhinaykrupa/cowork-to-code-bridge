@@ -341,6 +341,157 @@ def call_mcp_tool(
         args += ["--params", json.dumps(params)]
     if mcp_proxy_url is not None:
         args += ["--proxy-url", mcp_proxy_url]
+    r = call_remote(
+        "scripts/mcp_proxy.sh",
+        args=args,
+        timeout=timeout,
+        bridge_root=bridge_root,
+    )
+    if r.get("exit_code") == 0 and r.get("stdout"):
+        with contextlib.suppress(Exception):
+            r["mcp_response"] = json.loads(r["stdout"])
+    return r
+
+
+def reply_to_machine(
+    request_id: str,
+    text: str,
+    bridge_root: Path | str | None = None,
+) -> None:
+    """Write a reply to a mid-task question raised by a running script.
+
+    Call this after call_remote_streaming returns {"state": "awaiting_reply"}.
+    Writes the reply JSON to cowork_results/<request_id>.json so the script
+    polling --wait on the Mac side picks it up and unblocks.
+
+    Args:
+        request_id: the "request_id" field from the awaiting_reply dict.
+        text:       the answer to send back (plain string).
+    """
+    root = Path(bridge_root) if bridge_root else _resolve_bridge_root()
+    cowork_results = root / "cowork_results"
+    cowork_results.mkdir(parents=True, exist_ok=True)
+    reply = {"id": request_id, "reply": text, "ts": time.time(), "from": "cowork"}
+    out = cowork_results / f"{request_id}.json"
+    tmp = out.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(reply))
+    tmp.rename(out)
+
+
+def resume_remote(
+    cmd_id: str,
+    deadline: float,
+    poll_interval: float = 1.0,
+    on_progress=None,
+    on_status=None,
+    interactive: bool = True,
+    bridge_root: Path | str | None = None,
+) -> dict:
+    """Re-enter the wait loop for a task after answering its question.
+
+    Call this after reply_to_machine() to continue waiting for the task's
+    final result (or its next question, if interactive=True).
+
+    Args:
+        cmd_id:    the "cmd_id" from the awaiting_reply dict.
+        deadline:  the "_deadline" from the awaiting_reply dict (absolute epoch).
+                   Preserves the original timeout budget — the clock never resets.
+    Returns:
+        Same dict shapes as call_remote_streaming: final result or another
+        awaiting_reply if the task asks another question.
+    """
+    root = Path(bridge_root) if bridge_root else _resolve_bridge_root()
+    results = root / "results"
+    progress = root / "progress"
+    to_cowork = root / "to_cowork"
+    result_file = results / f"{cmd_id}.json"
+    progress_file = progress / f"{cmd_id}.log"
+    status_file = progress / f"{cmd_id}.status.json"
+    emit = on_progress or (lambda chunk: print(chunk, end="", flush=True))
+    seen = 0
+    last_status_mtime: float = 0.0
+    while time.time() < deadline:
+        try:
+            if progress_file.exists():
+                data = progress_file.read_text()
+                if len(data) > seen:
+                    emit(data[seen:])
+                    seen = len(data)
+        except OSError:
+            pass
+        if on_status is not None:
+            try:
+                mtime = status_file.stat().st_mtime
+                if mtime > last_status_mtime:
+                    last_status_mtime = mtime
+                    on_status(json.loads(status_file.read_text()))
+            except (OSError, json.JSONDecodeError):
+                pass
+        if interactive and to_cowork.exists():
+            for req_file in sorted(to_cowork.glob("*.json")):
+                try:
+                    req = json.loads(req_file.read_text())
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if req.get("parent") == cmd_id:
+                    req_file.rename(req_file.with_suffix(".json.answered"))
+                    return {
+                        "state": "awaiting_reply",
+                        "cmd_id": cmd_id,
+                        "request_id": req.get("id", req_file.stem),
+                        "question": req.get("request", ""),
+                        "from": req.get("from", "claude-code"),
+                        "_deadline": deadline,
+                        "_bridge_root": str(root),
+                    }
+        if result_file.exists():
+            try:
+                return json.loads(result_file.read_text())
+            except json.JSONDecodeError:
+                time.sleep(poll_interval)
+                continue
+        time.sleep(poll_interval)
+    raise TimeoutError(
+        f"bridge: no result for {cmd_id} — deadline expired while waiting for reply."
+    )
+
+
+def daemon_alive(
+    bridge_root: Path | str | None = None,
+    ping_timeout: int = 10,
+) -> bool:
+    """Quick health check — submits the ping script and waits for exit_code==0.
+
+    Returns True if the daemon is reachable and healthy, False otherwise.
+    Never raises — all errors are caught and treated as "not alive".
+    """
+    try:
+        r = call_remote(
+            "scripts/ping.sh",
+            args=[],
+            timeout=ping_timeout,
+            bridge_root=bridge_root,
+        )
+        return r.get("exit_code") == 0
+    except TimeoutError:
+        return False
+
+    Example::
+
+        r = call_mcp_tool("filesystem", "tools/list", {})
+        tools = r["mcp_response"]["result"]["tools"]
+
+        r = call_mcp_tool("postgres", "tools/call", {
+            "name": "query",
+            "arguments": {"sql": "SELECT count(*) FROM users"},
+        })
+        row = r["mcp_response"]["result"]["content"][0]["text"]
+    """
+    args = ["--server", server, "--method", method]
+    if params is not None:
+        args += ["--params", json.dumps(params)]
+    if mcp_proxy_url is not None:
+        args += ["--proxy-url", mcp_proxy_url]
     r = call_remote("scripts/mcp_proxy.sh", args=args, timeout=timeout,
                     bridge_root=bridge_root)
     if r.get("exit_code") == 0 and r.get("stdout"):
