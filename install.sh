@@ -1114,7 +1114,6 @@ fi
 PK
 chmod +x "$BRIDGE_ROOT/scripts/process_kill.sh"
 
-<<<<<<< ours
 # ── mcp_proxy.sh ──────────────────────────────────────────────────────────────
 cat > "$BRIDGE_ROOT/scripts/mcp_proxy.sh" <<'MCPPROXY'
 #!/usr/bin/env bash
@@ -1542,8 +1541,6 @@ MCPLIST
 chmod +x "$BRIDGE_ROOT/scripts/mcp_list_servers.sh"
 
 
-=======
->>>>>>> theirs
 # mcp_audit.sh — cross-surface MCP audit.
 # Addresses: anthropics/claude-code#56353 — no first-class tool to compare
 # MCPs registered in local Claude Code vs what a Cowork session can reach.
@@ -1635,11 +1632,7 @@ MCPAUDIT
 chmod +x "$BRIDGE_ROOT/scripts/mcp_audit.sh"
 
 
-<<<<<<< ours
 c_green "  ✓ scripts installed: ping, hello, run_claude, mac_health, mac_ram, mac_disk, mac_top, mac_network, port_check, docker_ps, docker_logs, pkg_outdated, git_status, list_scripts, env_check, disk_hogs, open_browser, request_cowork, process_kill, mcp_proxy, mcp_register, mcp_list_servers, mcp_audit"
-=======
-c_green "  ✓ scripts installed: ping, hello, run_claude, mac_health, mac_ram, mac_disk, mac_top, mac_network, port_check, docker_ps, docker_logs, pkg_outdated, git_status, list_scripts, env_check, disk_hogs, open_browser, request_cowork, process_kill, mcp_audit"
->>>>>>> theirs
 
 # ─── 5b. Fetch the single-file Cowork client (one source of truth) ───────────
 # bridge_client.py is the EXACT file the Cowork sandbox imports. To avoid drift,
@@ -2100,16 +2093,4 @@ User scripts dir:    $USER_SCRIPTS_DIR
 Uninstall (one command — undoes everything this installer did):
   $USER_SCRIPTS_DIR/cowork-to-code-bridge-uninstall
 
-Or, if $USER_SCRIPTS_DIR is on your PATH:
-  cowork-to-code-bridge-uninstall
-
-Non-interactively:
-  cowork-to-code-bridge-uninstall --yes
-
-If neither path is available:
-  curl -fsSL https://raw.githubusercontent.com/$REPO/main/daemon/uninstall.sh | bash
-
-$(c_yellow "⭐ If this saved you time, a star on GitHub helps others find it:")
-  https://github.com/$REPO
-
-DONE
+Or, if $USER_SCRIPTS_DIR is on
