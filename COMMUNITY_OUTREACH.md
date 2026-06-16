@@ -129,13 +129,43 @@ These links appear in every issue and direct maintainers to our implementation:
 
 ---
 
+## Expansion Strategy
+
+### Phase 1: Foundation (COMPLETED ✅)
+- ✅ Crew.ai (#6178)
+- ✅ Hermes (#47199)
+- ✅ Open Claw (#93609)
+
+### Phase 2: Tier 1 Frameworks (READY TO POST)
+High-impact multi-agent frameworks with large user bases:
+- **LangChain** — largest user base, tons of agent use cases
+- **LangGraph** — graph-native agents, growing ecosystem
+- **AutoGen** — Microsoft backing, active community
+- **n8n** — automation + agents, local execution core need
+- **Dify** — production workflows, needs local execution
+
+**Posting Guide:** See [docs/TIER1_POSTING_CHECKLIST.md](docs/TIER1_POSTING_CHECKLIST.md) for ready-to-post issue drafts.
+
+### Phase 3: Tier 2 Frameworks (TEMPLATES READY)
+- Langflow (low-code agent designer)
+- CrewAI Examples (reference implementations)
+- Others from expanded list
+
+### Phase 4: Visibility / Curated Lists (TEMPLATES READY)
+- awesome-mcp-servers (MCP discovery)
+- awesome-mcp-clients (MCP clients list)
+- awesome-ai-agents (agent ecosystem)
+- And 5+ other curated lists
+
+**Master Templates:** See [docs/MULTI_FRAMEWORK_OUTREACH.md](docs/MULTI_FRAMEWORK_OUTREACH.md) for all framework variants.
+
 ## Next Steps
 
-1. ✅ **Complete Crew.ai** (DONE)
-2. ⏳ **Post Hermes** (Manual - find correct repo)
-3. ⏳ **Post Open Claw** (Manual)
-4. 📊 **Monitor for responses** (track interactions)
-5. 🔗 **Request backlinks** (once issues are visible)
+1. ✅ **Phase 1 complete** (3 repos, 3 live issues)
+2. ⏳ **Phase 2 ready** (5 Tier 1 repos, drafts complete)
+3. ⏳ **Post Phase 2** (recommended: 1-2 repos/day for quality)
+4. 📊 **Monitor responses** (track engagement + feedback)
+5. 🔗 **Phase 3 & 4** (after Tier 1 feedback gathered)
 
 ---
 
@@ -143,9 +173,11 @@ These links appear in every issue and direct maintainers to our implementation:
 
 | File | Purpose |
 |---|---|
-| docs/MCP_SERVER_IMPLEMENTATION.md | Comprehensive MCP docs (for reference) |
+| docs/MCP_SERVER_IMPLEMENTATION.md | Comprehensive MCP docs (technical reference) |
 | docs/EXTERNAL_AGENT_INTEGRATION.md | Integration guide for all agents |
-| docs/HERMES_OPENCLAW_OUTREACH.md | Issue templates for manual posting |
+| docs/HERMES_OPENCLAW_OUTREACH.md | Issue templates for Hermes + Open Claw |
+| docs/MULTI_FRAMEWORK_OUTREACH.md | Master templates + framework-specific variants |
+| docs/TIER1_POSTING_CHECKLIST.md | Ready-to-post Tier 1 issue drafts (LangChain, LangGraph, AutoGen, n8n, Dify) |
 | examples/hermes-mcp-config.json | Hermes MCP config example |
 | examples/openclaw-mcp-config.json | Open Claw MCP config example |
 | TEST_REPORT.md | Validation that code is production-ready |
