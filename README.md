@@ -424,6 +424,54 @@ Before the bridge, anything that needed your actual machine meant leaving Cowork
 
 ---
 
+## Ecosystem Integration Capabilities
+
+cowork-to-code-bridge is designed as a universal **MCP-based local code execution backend**, seamlessly integrating with major agent frameworks and development platforms across the broader ecosystem:
+
+**Agent Frameworks & Orchestration**
+- **LangGraph** — Graph-based workflow integration enabling local code execution nodes
+- **LangChain** — MCP client integration for agent-based code generation and validation
+- **AutoGen** — Code execution configuration with multi-language support via MCP
+- **CrewAI** — Production crew workflows with safe local code execution patterns
+- **Pydantic AI** — Structured code execution with validation via agent tools
+- **n8n** — Secure local code execution steps for workflow automation
+- **Dify** — Local code execution patterns for autonomous agent workflows
+- **Langflow** — Visual workflow builder integration with code execution components
+- **Mastra, Upsonic, AutoGPT, OpenAI Swarm** — General-purpose agent infrastructure
+
+**Model Context Protocol (MCP) Ecosystem**
+- **Official MCP Registry** — Canonical server listing for all MCP clients
+- **MCP Quickstart Resources** — Reference implementation for stateful MCP server patterns
+- **MCP Specification** — Documentation of async escalation patterns for long-running operations
+- **GitHub's MCP Server** — Companion pattern enabling GitHub data discovery + local code execution
+
+**Developer-First Platforms**
+- **Cursor, VS Code, and IDE Extensions** — MCP provider for Claude Code within editor environments
+- **OpenAI Assistants** — Code execution backend for assistant-based workflows
+
+**Infrastructure & CI/CD**
+- **GitHub Actions & Agentic Workflows** — Self-hosted runner integration for local execution
+- **DevOps Agent Frameworks** — Infrastructure automation with local code execution context
+- **Kubernetes & Container-Native Workflows** — MCP server deployment patterns
+
+**Community & Visibility**
+- **Curated Registries** — awesome-mcp-servers, awesome-ai-agents, awesome-mcp-clients, 500-AI-Agents-Projects
+- **Agent Ecosystem Directories** — Listed in major community indexes for agent infrastructure and execution backends
+
+**Integration Approach**
+
+Each integration leverages the bridge's core capabilities:
+- Zero external API key management (uses local Claude Code subscription)
+- Full repository and environment context access
+- JSONRPC 2.0 MCP standard protocol
+- File-based queue with token authentication
+- Async escalation patterns for non-blocking task delegation
+- Idempotent request handling with unique operation tracking
+
+The bridge is framework-agnostic and protocol-standard, enabling any MCP-aware tool to escalate code execution tasks while maintaining local context, security, and cost predictability. For integration guidance specific to your framework, see **[docs/EXTERNAL_AGENT_INTEGRATION.md](https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/docs/EXTERNAL_AGENT_INTEGRATION.md)** and **[docs/MCP_SERVER_IMPLEMENTATION.md](https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/docs/MCP_SERVER_IMPLEMENTATION.md)**.
+
+---
+
 ## How it actually works (for the curious)
 
 ```
