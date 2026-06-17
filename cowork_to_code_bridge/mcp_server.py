@@ -37,6 +37,9 @@ class MCPServer:
             bridge_root = Path(bridge_root)
         self.bridge_root = bridge_root or self._resolve_bridge_root()
         self.request_id_counter = 0
+        self.quota_limit_daily = 100  # Operations per day
+        self.quota_reset_hour = 0  # Reset at midnight UTC
+        self.session_cache_mode = False  # Fresh context per call (vs persistent agent)
         self.tools = {
             "escalate_to_claude": {
                 "description": "Hand a task to Claude Code on your machine. "
@@ -161,6 +164,56 @@ class MCPServer:
         else:
             raise ValueError(f"Unknown tool: {tool_name}")
 
+    def _get_quota(self) -> dict[str, Any]:
+        """Calculate remaining quota based on journal."""
+        journal_file = self.bridge_root / "daemon.log"
+        if not journal_file.exists():
+            return {
+                "used": 0,
+                "remaining": self.quota_limit_daily,
+                "reset_at": self._next_reset_time(),
+                "limit": self.quota_limit_daily,
+            }
+
+        # Count operations in journal for today
+        import datetime
+        today_start = datetime.datetime.now(datetime.timezone.utc).replace(
+            hour=self.quota_reset_hour, minute=0, second=0, microsecond=0
+        )
+        if datetime.datetime.now(datetime.timezone.utc).hour < self.quota_reset_hour:
+            today_start -= datetime.timedelta(days=1)
+
+        today_ts = today_start.timestamp()
+        count = 0
+        try:
+            for line in journal_file.read_text().splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    entry = json.loads(line)
+                    if entry.get("ts", 0) >= today_ts:
+                        count += 1
+                except json.JSONDecodeError:
+                    pass
+        except Exception:
+            pass
+
+        return {
+            "used": count,
+            "remaining": max(0, self.quota_limit_daily - count),
+            "reset_at": self._next_reset_time(),
+            "limit": self.quota_limit_daily,
+        }
+
+    def _next_reset_time(self) -> str:
+        """Return ISO timestamp for next quota reset."""
+        import datetime
+        now = datetime.datetime.now(datetime.timezone.utc)
+        reset = now.replace(hour=self.quota_reset_hour, minute=0, second=0, microsecond=0)
+        if reset <= now:
+            reset += datetime.timedelta(days=1)
+        return reset.isoformat()
+
     def _tool_escalate(self, args: dict[str, Any]) -> dict[str, Any]:
         """Tool: escalate_to_claude."""
         request = args.get("request", "")
@@ -197,11 +250,18 @@ class MCPServer:
         reply_file = replies / f"{request_id}.json"
         deadline = time.time() + wait_seconds
 
+        quota_before = self._get_quota()
+
         while time.time() < deadline:
             if reply_file.exists():
                 try:
                     reply = json.loads(reply_file.read_text())
-                    return {"status": "completed", "result": reply}
+                    quota_after = self._get_quota()
+                    return {
+                        "status": "completed",
+                        "result": reply,
+                        "quota": quota_after,
+                    }
                 except json.JSONDecodeError:
                     time.sleep(0.5)
                     continue
@@ -212,6 +272,7 @@ class MCPServer:
             "message": f"No reply within {wait_seconds}s. "
             "Claude Code (Cowork) may not be open. "
             f"Request queued at {request_file}.",
+            "quota": quota_before,
         }
 
     def _tool_run_script(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -324,9 +385,15 @@ def main():
         default=None,
         help="Override bridge root directory (default: auto-detect)",
     )
+    parser.add_argument(
+        "--session-cache",
+        action="store_true",
+        help="Use fresh context per call (vs persistent agent). For single-shot workflows.",
+    )
     args = parser.parse_args()
 
     server = MCPServer(bridge_root=args.bridge_root)
+    server.session_cache_mode = args.session_cache
 
     if args.stdio:
         server.run_stdio()
