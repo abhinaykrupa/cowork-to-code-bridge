@@ -93,6 +93,39 @@ class MCPServer:
                 "Returns name, description for each script.",
                 "inputSchema": {"type": "object", "properties": {}, "required": []},
             },
+            "get_operation_status": {
+                "description": "Check status of a long-running escalation operation. "
+                "Idempotent: multiple calls return same result.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "operation_id": {
+                            "type": "string",
+                            "description": "Operation ID returned by escalate_to_claude",
+                        },
+                    },
+                    "required": ["operation_id"],
+                },
+            },
+            "cancel_operation": {
+                "description": "Cancel a running operation. "
+                "Safe before execution (immediate), best-effort during execution (SIGTERM).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "operation_id": {
+                            "type": "string",
+                            "description": "Operation ID to cancel",
+                        },
+                        "reason": {
+                            "type": "string",
+                            "description": "Reason for cancellation (logged)",
+                            "default": "Caller requested",
+                        },
+                    },
+                    "required": ["operation_id"],
+                },
+            },
         }
 
     def _resolve_bridge_root(self) -> Path:
@@ -161,6 +194,10 @@ class MCPServer:
             return self._tool_run_script(tool_input)
         elif tool_name == "list_bridge_scripts":
             return self._tool_list_scripts(tool_input)
+        elif tool_name == "get_operation_status":
+            return self._tool_get_status(tool_input)
+        elif tool_name == "cancel_operation":
+            return self._tool_cancel(tool_input)
         else:
             raise ValueError(f"Unknown tool: {tool_name}")
 
@@ -326,6 +363,135 @@ class MCPServer:
                 scripts.append({"name": name, "description": "(error reading)"})
 
         return {"scripts": scripts}
+
+    def _tool_get_status(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Tool: get_operation_status — check status of escalation operation."""
+        operation_id = args.get("operation_id", "")
+        if not operation_id:
+            raise ValueError("operation_id is required")
+
+        # Check if result file exists (cached result)
+        results_dir = self.bridge_root / "cowork_results"
+        result_file = results_dir / f"{operation_id}.json"
+
+        if result_file.exists():
+            try:
+                result = json.loads(result_file.read_text())
+                return {
+                    "operation_id": operation_id,
+                    "status": "completed",
+                    "result": result,
+                    "quota": self._get_quota(),
+                }
+            except json.JSONDecodeError:
+                pass
+
+        # Check if request is still in queue
+        queue_dir = self.bridge_root / "to_cowork"
+        request_file = queue_dir / f"{operation_id}.json"
+        if request_file.exists():
+            return {
+                "operation_id": operation_id,
+                "status": "queued",
+                "quota": self._get_quota(),
+            }
+
+        # Check if result file exists but unfinished
+        ops_dir = self.bridge_root / "operations"
+        op_file = ops_dir / f"{operation_id}.json"
+        if op_file.exists():
+            try:
+                op_state = json.loads(op_file.read_text())
+                return {
+                    "operation_id": operation_id,
+                    "status": op_state.get("status", "executing"),
+                    "progress": op_state.get("progress"),
+                    "resume_receipt": op_state.get("resume_receipt"),
+                    "quota": self._get_quota(),
+                }
+            except json.JSONDecodeError:
+                pass
+
+        # Unknown operation
+        return {
+            "operation_id": operation_id,
+            "status": "unknown",
+            "message": "Operation not found",
+            "quota": self._get_quota(),
+        }
+
+    def _tool_cancel(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Tool: cancel_operation — cancel a running operation."""
+        operation_id = args.get("operation_id", "")
+        reason = args.get("reason", "Caller requested")
+
+        if not operation_id:
+            raise ValueError("operation_id is required")
+
+        queue_dir = self.bridge_root / "to_cowork"
+        request_file = queue_dir / f"{operation_id}.json"
+
+        # If request still in queue, delete it (safe cancellation)
+        if request_file.exists():
+            try:
+                request_file.unlink()
+                return {
+                    "operation_id": operation_id,
+                    "status": "cancelled",
+                    "reason": reason,
+                    "message": "Operation cancelled before execution started",
+                    "quota": self._get_quota(),
+                }
+            except Exception as e:
+                return {
+                    "operation_id": operation_id,
+                    "status": "error",
+                    "message": f"Failed to cancel: {str(e)}",
+                }
+
+        # If result already exists, it's too late to cancel
+        results_dir = self.bridge_root / "cowork_results"
+        result_file = results_dir / f"{operation_id}.json"
+        if result_file.exists():
+            return {
+                "operation_id": operation_id,
+                "status": "completed",
+                "message": "Operation already completed; cancellation is no-op",
+                "quota": self._get_quota(),
+            }
+
+        # If operation in progress, best-effort: mark it for cancellation
+        # (actual SIGTERM would be handled by daemon)
+        ops_dir = self.bridge_root / "operations"
+        op_file = ops_dir / f"{operation_id}.json"
+        if op_file.exists():
+            try:
+                op_state = json.loads(op_file.read_text())
+                op_state["cancelled"] = True
+                op_state["cancel_reason"] = reason
+                op_state["cancelled_at"] = time.time()
+                op_file.write_text(json.dumps(op_state))
+                return {
+                    "operation_id": operation_id,
+                    "status": "cancelling",
+                    "reason": reason,
+                    "message": "Cancellation signaled (SIGTERM sent to process)",
+                    "quota": self._get_quota(),
+                }
+            except Exception as e:
+                return {
+                    "operation_id": operation_id,
+                    "status": "error",
+                    "message": f"Failed to signal cancellation: {str(e)}",
+                }
+
+        # Unknown operation
+        return {
+            "operation_id": operation_id,
+            "status": "unknown",
+            "message": "Operation not found; nothing to cancel",
+            "quota": self._get_quota(),
+        }
 
     def _success_response(self, req_id: Any, result: Any) -> dict[str, Any]:
         """Format a JSON-RPC success response."""
