@@ -442,7 +442,7 @@ class MCPServer:
               {name, status, duration_ms, checkpoint_data}
               status in {"started", "completed", "failed"}
           artifacts     : list[dict]   — files/code produced, each:
-              {path, type, size, timestamp}
+              {path, type, size_bytes, timestamp}
           can_resume    : bool         — whether resume_from is actionable
           resume_from   : str | None   — sub_step name to resume at
         """
@@ -463,14 +463,18 @@ class MCPServer:
                 }
             )
         receipt["sub_steps"] = normalized_steps
-        # Normalize each artifact.
+        # Normalize each artifact. The canonical field is `size_bytes`; older
+        # state files used `size`, so fall back to it for backward compatibility.
         normalized_artifacts = []
         for art in receipt.get("artifacts") or []:
+            size_bytes = art.get("size_bytes")
+            if size_bytes is None:
+                size_bytes = art.get("size")
             normalized_artifacts.append(
                 {
                     "path": art.get("path"),
                     "type": art.get("type"),
-                    "size": art.get("size"),
+                    "size_bytes": size_bytes,
                     "timestamp": art.get("timestamp"),
                 }
             )

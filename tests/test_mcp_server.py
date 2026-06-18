@@ -280,13 +280,13 @@ def test_resume_receipt_includes_substeps(mcp_server, bridge_root):
                 {
                     "path": "parser.py",
                     "type": "python",
-                    "size": 3120,
+                    "size_bytes": 3120,
                     "timestamp": 1718556020,
                 },
                 {
                     "path": "test_parser.py",
                     "type": "python",
-                    "size": 890,
+                    "size_bytes": 890,
                     "timestamp": 1718556030,
                 },
             ],
@@ -310,7 +310,7 @@ def test_resume_receipt_includes_substeps(mcp_server, bridge_root):
     # Artifacts present with all required fields.
     assert len(receipt["artifacts"]) == 2
     for art in receipt["artifacts"]:
-        assert set(art.keys()) == {"path", "type", "size", "timestamp"}
+        assert set(art.keys()) == {"path", "type", "size_bytes", "timestamp"}
 
     assert receipt["can_resume"] is True
     assert receipt["resume_from"] == "debugging"
@@ -344,3 +344,28 @@ def test_resume_receipt_normalizes_legacy_state(mcp_server, bridge_root):
     assert receipt["context"] == {"last_completed_step": "code_generation"}
     assert receipt["can_resume"] is False
     assert receipt["resume_from"] is None
+
+
+def test_resume_receipt_normalizes_legacy_artifact_size(mcp_server, bridge_root):
+    """Artifacts written with the old `size` key are upgraded to `size_bytes`."""
+    operation_id = "op_legacy_artifact_size"
+    op_file = bridge_root / "operations" / f"{operation_id}.json"
+    op_file.parent.mkdir(parents=True, exist_ok=True)
+
+    op_state = {
+        "operation_id": operation_id,
+        "status": "executing",
+        "resume_receipt": {
+            "artifacts": [
+                # Legacy artifact: uses `size`, not `size_bytes`.
+                {"path": "old.py", "type": "python", "size": 512, "timestamp": 1},
+            ],
+        },
+    }
+    op_file.write_text(json.dumps(op_state))
+
+    result = _get_status(mcp_server, operation_id)
+    art = result["resume_receipt"]["artifacts"][0]
+
+    assert set(art.keys()) == {"path", "type", "size_bytes", "timestamp"}
+    assert art["size_bytes"] == 512  # value carried over from legacy `size`

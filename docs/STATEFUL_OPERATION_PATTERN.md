@@ -267,7 +267,7 @@ interface Artifact {
   type: string;
 
   /** Size in bytes (null if not yet flushed to disk). */
-  size: number | null;
+  size_bytes: number | null;
 
   /** Unix timestamp (seconds) when the artifact was last written. */
   timestamp: number | null;
@@ -280,7 +280,7 @@ interface Artifact {
 |---|---|
 | `sub_steps` | Append-only & ordered. At most one trailing `started` entry. |
 | `sub_steps[].status` | Transitions `started → completed` or `started → failed`. Never reopens. |
-| `artifacts` | Each `path` is unique; re-writing a path updates `size`/`timestamp` in place. |
+| `artifacts` | Each `path` is unique; re-writing a path updates `size_bytes`/`timestamp` in place. |
 | `can_resume` | `true` ⟺ `resume_from` names an existing sub-step not yet `completed`. |
 | All fields | Always present in the `get_operation_status` response (back-filled if missing on disk). |
 
@@ -304,9 +304,9 @@ interface Artifact {
         "checkpoint_data": { "passed": 4, "failed": 1, "failing": "test_api_health" } }
     ],
     "artifacts": [
-      { "path": ".pytest_cache/lastfailed", "type": "json", "size": 64,
+      { "path": ".pytest_cache/lastfailed", "type": "json", "size_bytes": 64,
         "timestamp": 1718556180 },
-      { "path": "junit-report.xml", "type": "xml", "size": 9120,
+      { "path": "junit-report.xml", "type": "xml", "size_bytes": 9120,
         "timestamp": 1718556181 }
     ],
     "can_resume": true,
@@ -333,7 +333,7 @@ interface Artifact {
         "checkpoint_data": { "harness": "pytest", "written": false } }
     ],
     "artifacts": [
-      { "path": "parser.py", "type": "python", "size": 3120,
+      { "path": "parser.py", "type": "python", "size_bytes": 3120,
         "timestamp": 1718556140 }
     ],
     "can_resume": true,
@@ -362,9 +362,9 @@ interface Artifact {
         "checkpoint_data": { "iteration": 2, "last_result": "1 failing" } }
     ],
     "artifacts": [
-      { "path": "tokenizer.py", "type": "python", "size": 5400,
+      { "path": "tokenizer.py", "type": "python", "size_bytes": 5400,
         "timestamp": 1718556260 },
-      { "path": "fix.diff", "type": "diff", "size": 412,
+      { "path": "fix.diff", "type": "diff", "size_bytes": 412,
         "timestamp": 1718556261 }
     ],
     "can_resume": true,
@@ -627,7 +627,7 @@ results/
         "checkpoint_data": { "tests_passed": 4, "tests_failed": 0 } }
     ],
     "artifacts": [
-      { "path": "junit-report.xml", "type": "xml", "size": 9120,
+      { "path": "junit-report.xml", "type": "xml", "size_bytes": 9120,
         "timestamp": 1718556045 }
     ],
     "can_resume": true,
