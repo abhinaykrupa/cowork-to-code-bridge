@@ -199,3 +199,148 @@ def test_mcp_unknown_method(mcp_server):
     resp = mcp_server.handle_request(req)
     assert "error" in resp
     assert resp["error"]["code"] == -32601
+
+
+def _get_status(mcp_server, operation_id):
+    """Helper: call get_operation_status and return the result dict."""
+    req = {
+        "jsonrpc": "2.0",
+        "id": 99,
+        "method": "tools/call",
+        "params": {
+            "name": "get_operation_status",
+            "arguments": {"operation_id": operation_id},
+        },
+    }
+    resp = mcp_server.handle_request(req)
+    assert "result" in resp, resp
+    return resp["result"]
+
+
+def test_escalate_initializes_empty_resume_receipt(mcp_server, bridge_root):
+    """escalate_to_claude seeds an operation state with an empty resume receipt."""
+    req = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "escalate_to_claude",
+            "arguments": {"request": "Generate a parser", "wait_seconds": 1},
+        },
+    }
+    mcp_server.handle_request(req)
+
+    op_files = list((bridge_root / "operations").glob("*.json"))
+    assert len(op_files) == 1
+    op_state = json.loads(op_files[0].read_text())
+    receipt = op_state["resume_receipt"]
+    assert receipt["sub_steps"] == []
+    assert receipt["artifacts"] == []
+    assert receipt["checkpoint_id"] is None
+    assert receipt["can_resume"] is False
+
+
+def test_resume_receipt_includes_substeps(mcp_server, bridge_root):
+    """get_operation_status returns a complete resume_receipt with sub_steps + artifacts."""
+    operation_id = "op_substeps_test"
+    op_file = bridge_root / "operations" / f"{operation_id}.json"
+    op_file.parent.mkdir(parents=True, exist_ok=True)
+
+    op_state = {
+        "operation_id": operation_id,
+        "status": "executing",
+        "created_at": 1718556000,
+        "updated_at": 1718556045,
+        "request": "Generate, test, and debug a parser",
+        "progress": {"step": "debugging", "percent_complete": 80},
+        "resume_receipt": {
+            "checkpoint_id": "chk_67890",
+            "context": {"module": "parser.py"},
+            "sub_steps": [
+                {
+                    "name": "generating",
+                    "status": "completed",
+                    "duration_ms": 4200,
+                    "checkpoint_data": {"lines_written": 120},
+                },
+                {
+                    "name": "testing",
+                    "status": "completed",
+                    "duration_ms": 1800,
+                    "checkpoint_data": {"tests_passed": 5, "tests_failed": 1},
+                },
+                {
+                    "name": "debugging",
+                    "status": "started",
+                    "duration_ms": None,
+                    "checkpoint_data": {"failing_test": "test_edge_case"},
+                },
+            ],
+            "artifacts": [
+                {
+                    "path": "parser.py",
+                    "type": "python",
+                    "size": 3120,
+                    "timestamp": 1718556020,
+                },
+                {
+                    "path": "test_parser.py",
+                    "type": "python",
+                    "size": 890,
+                    "timestamp": 1718556030,
+                },
+            ],
+            "can_resume": True,
+            "resume_from": "debugging",
+        },
+    }
+    op_file.write_text(json.dumps(op_state))
+
+    result = _get_status(mcp_server, operation_id)
+    receipt = result["resume_receipt"]
+
+    # Sub-steps present with all required fields.
+    assert len(receipt["sub_steps"]) == 3
+    names = [s["name"] for s in receipt["sub_steps"]]
+    assert names == ["generating", "testing", "debugging"]
+    for step in receipt["sub_steps"]:
+        assert set(step.keys()) == {"name", "status", "duration_ms", "checkpoint_data"}
+        assert step["status"] in {"started", "completed", "failed"}
+
+    # Artifacts present with all required fields.
+    assert len(receipt["artifacts"]) == 2
+    for art in receipt["artifacts"]:
+        assert set(art.keys()) == {"path", "type", "size", "timestamp"}
+
+    assert receipt["can_resume"] is True
+    assert receipt["resume_from"] == "debugging"
+    assert receipt["checkpoint_id"] == "chk_67890"
+
+
+def test_resume_receipt_normalizes_legacy_state(mcp_server, bridge_root):
+    """Operation state written before sub_steps/artifacts is upgraded on read."""
+    operation_id = "op_legacy_test"
+    op_file = bridge_root / "operations" / f"{operation_id}.json"
+    op_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Legacy state: resume_receipt with only the old fields.
+    op_state = {
+        "operation_id": operation_id,
+        "status": "executing",
+        "resume_receipt": {
+            "checkpoint_id": "chk_legacy",
+            "context": {"last_completed_step": "code_generation"},
+        },
+    }
+    op_file.write_text(json.dumps(op_state))
+
+    result = _get_status(mcp_server, operation_id)
+    receipt = result["resume_receipt"]
+
+    # Missing fields filled with empty defaults; existing fields preserved.
+    assert receipt["sub_steps"] == []
+    assert receipt["artifacts"] == []
+    assert receipt["checkpoint_id"] == "chk_legacy"
+    assert receipt["context"] == {"last_completed_step": "code_generation"}
+    assert receipt["can_resume"] is False
+    assert receipt["resume_from"] is None

@@ -298,6 +298,18 @@ class MCPServer:
                 "memory_mb": 0,
                 "cpu_percent": 0,
             },
+            # Resume receipt scaffolding. sub_steps tracks execution phases
+            # (e.g. "generating", "testing", "debugging"); artifacts tracks
+            # files/code produced. Both start empty and are populated by the
+            # executing agent. See docs/STATEFUL_OPERATION_PATTERN.md §5.
+            "resume_receipt": {
+                "checkpoint_id": None,
+                "context": {},
+                "sub_steps": [],
+                "artifacts": [],
+                "can_resume": False,
+                "resume_from": None,
+            },
         }
         op_file.write_text(json.dumps(op_state))
 
@@ -415,6 +427,58 @@ class MCPServer:
             "repeated_calls": repeated_calls if repeated_calls else None,
         }
 
+    def _build_resume_receipt(self, op_state: dict[str, Any]) -> dict[str, Any]:
+        """Return a complete resume_receipt for an operation state.
+
+        Backward-compatible: operation state files written before sub_steps /
+        artifacts existed are upgraded on read by filling in the missing fields
+        with their empty defaults. The on-disk file is not mutated (polling is
+        read-only / idempotent); the receipt is normalized in the response only.
+
+        Receipt shape:
+          checkpoint_id : str | None   — opaque id of the latest checkpoint
+          context       : dict         — free-form resume context
+          sub_steps     : list[dict]   — execution phases, each:
+              {name, status, duration_ms, checkpoint_data}
+              status in {"started", "completed", "failed"}
+          artifacts     : list[dict]   — files/code produced, each:
+              {path, type, size, timestamp}
+          can_resume    : bool         — whether resume_from is actionable
+          resume_from   : str | None   — sub_step name to resume at
+        """
+        receipt = dict(op_state.get("resume_receipt") or {})
+        receipt.setdefault("checkpoint_id", None)
+        receipt.setdefault("context", {})
+        receipt.setdefault("sub_steps", [])
+        receipt.setdefault("artifacts", [])
+        # Normalize each sub_step so every field is present for consumers.
+        normalized_steps = []
+        for step in receipt.get("sub_steps") or []:
+            normalized_steps.append(
+                {
+                    "name": step.get("name"),
+                    "status": step.get("status"),
+                    "duration_ms": step.get("duration_ms"),
+                    "checkpoint_data": step.get("checkpoint_data", {}),
+                }
+            )
+        receipt["sub_steps"] = normalized_steps
+        # Normalize each artifact.
+        normalized_artifacts = []
+        for art in receipt.get("artifacts") or []:
+            normalized_artifacts.append(
+                {
+                    "path": art.get("path"),
+                    "type": art.get("type"),
+                    "size": art.get("size"),
+                    "timestamp": art.get("timestamp"),
+                }
+            )
+        receipt["artifacts"] = normalized_artifacts
+        receipt.setdefault("can_resume", False)
+        receipt.setdefault("resume_from", None)
+        return receipt
+
     def _tool_get_status(self, args: dict[str, Any]) -> dict[str, Any]:
         """Tool: get_operation_status — check status of escalation operation."""
         operation_id = args.get("operation_id", "")
@@ -457,7 +521,9 @@ class MCPServer:
                     "operation_id": operation_id,
                     "status": op_state.get("status", "executing"),
                     "progress": op_state.get("progress"),
-                    "resume_receipt": op_state.get("resume_receipt"),
+                    # Always return a complete, normalized resume_receipt so
+                    # callers can rely on sub_steps/artifacts being present.
+                    "resume_receipt": self._build_resume_receipt(op_state),
                     "quota": self._get_quota(),
                 }
 
