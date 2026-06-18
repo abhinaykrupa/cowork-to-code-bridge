@@ -66,6 +66,130 @@ def _load_token(bridge_root: Path) -> str | None:
     return None
 
 
+def queue_task(
+    script: str,
+    args: list[str | int | float] | None = None,
+    timeout: int = 60,
+    cwd: str | None = None,
+    env: dict[str, str] | None = None,
+    bridge_root: Path | str | None = None,
+    idempotency_key: str | None = None,
+    plan: str | None = None,
+    max_budget_usd: float | None = None,
+) -> dict[str, Any]:
+    """Queue a task WITHOUT waiting for result (async, non-blocking).
+
+    Args:
+        Same as call_remote, but returns immediately after queuing.
+
+    Returns:
+        Dict with keys: task_id (str), status (str "queued"), timestamp (float).
+        Use poll_task_result(task_id) later to check for completion.
+
+    This is useful when calling from environments with short timeouts (e.g., 45s
+    bash sandbox). Queue the task, return immediately, then poll later.
+    """
+    root = Path(bridge_root) if bridge_root else _resolve_bridge_root()
+    queue = root / "queue"
+    queue.mkdir(parents=True, exist_ok=True)
+
+    task_id = f"{int(time.time())}_{uuid.uuid4().hex[:8]}"
+    payload: dict[str, Any] = {
+        "id": task_id,
+        "script": script,
+        "args": args or [],
+        "timeout": timeout,
+        "ts_submitted": time.time(),
+    }
+    if cwd:
+        payload["cwd"] = cwd
+    if env:
+        payload["env"] = env
+    if idempotency_key:
+        payload["idempotency_key"] = idempotency_key
+    if plan is not None:
+        payload["plan"] = plan
+    if max_budget_usd is not None:
+        payload["max_budget_usd"] = float(max_budget_usd)
+
+    token = _load_token(root)
+    if token:
+        payload["token"] = token
+
+    # Atomic write to queue
+    task_file = queue / f"{task_id}.json"
+    tmp = task_file.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload))
+    tmp.rename(task_file)
+
+    return {
+        "task_id": task_id,
+        "status": "queued",
+        "timestamp": payload["ts_submitted"],
+    }
+
+
+def poll_task_result(
+    task_id: str,
+    bridge_root: Path | str | None = None,
+) -> dict[str, Any]:
+    """Check if a queued task has completed (idempotent polling).
+
+    Args:
+        task_id: The task_id returned from queue_task().
+        bridge_root: Override the auto-detected bridge directory.
+
+    Returns:
+        Dict with status (str):
+          "queued" - task not yet picked up by daemon
+          "running" - daemon is executing the task
+          "completed" - task finished; dict also contains full result
+                       (id, exit_code, stdout, stderr, ts_completed)
+
+    This is fully idempotent — can be called multiple times without side effects.
+    """
+    root = Path(bridge_root) if bridge_root else _resolve_bridge_root()
+    queue = root / "queue"
+    results = root / "results"
+    progress = root / "progress"
+
+    # Check if result exists (task is done)
+    result_file = results / f"{task_id}.json"
+    if result_file.exists():
+        try:
+            result = json.loads(result_file.read_text())
+            return {
+                "status": "completed",
+                **result,
+            }
+        except json.JSONDecodeError:
+            pass  # File is being written; will check again on next poll
+
+    # Check if progress log exists (task is running)
+    progress_file = progress / f"{task_id}.log"
+    if progress_file.exists():
+        return {
+            "status": "running",
+            "task_id": task_id,
+            "progress_available": True,
+        }
+
+    # Check if task is still in queue
+    task_file = queue / f"{task_id}.json"
+    if task_file.exists():
+        return {
+            "status": "queued",
+            "task_id": task_id,
+        }
+
+    # Task not found — either never existed or was cleaned up
+    return {
+        "status": "unknown",
+        "task_id": task_id,
+        "message": "Task not found in queue or results",
+    }
+
+
 def call_remote(
     script: str,
     args: list[str | int | float] | None = None,

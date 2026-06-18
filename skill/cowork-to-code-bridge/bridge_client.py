@@ -64,6 +64,105 @@ def _load_token(bridge_root: Path) -> str | None:
     return None
 
 
+def queue_task(
+    script: str,
+    args: list[str | int | float] | None = None,
+    timeout: int = 60,
+    cwd: str | None = None,
+    env: dict[str, str] | None = None,
+    bridge_root: Path | str | None = None,
+    idempotency_key: str | None = None,
+    plan: str | None = None,
+    max_budget_usd: float | None = None,
+) -> dict[str, Any]:
+    """Queue a task WITHOUT waiting for result (async, non-blocking).
+
+    Returns immediately with task_id. Use poll_task_result(task_id) to check
+    for completion later. Useful in time-limited environments (e.g. 45s bash).
+    """
+    root = Path(bridge_root) if bridge_root else _resolve_bridge_root()
+    queue = root / "queue"
+    queue.mkdir(parents=True, exist_ok=True)
+
+    task_id = f"{int(time.time())}_{uuid.uuid4().hex[:8]}"
+    payload: dict[str, Any] = {
+        "id": task_id,
+        "script": script,
+        "args": args or [],
+        "timeout": timeout,
+        "ts_submitted": time.time(),
+    }
+    if cwd:
+        payload["cwd"] = cwd
+    if env:
+        payload["env"] = env
+    if idempotency_key:
+        payload["idempotency_key"] = idempotency_key
+    if plan is not None:
+        payload["plan"] = plan
+    if max_budget_usd is not None:
+        payload["max_budget_usd"] = float(max_budget_usd)
+
+    token = _load_token(root)
+    if token:
+        payload["token"] = token
+
+    task_file = queue / f"{task_id}.json"
+    tmp = task_file.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload))
+    tmp.rename(task_file)
+
+    return {
+        "task_id": task_id,
+        "status": "queued",
+        "timestamp": payload["ts_submitted"],
+    }
+
+
+def poll_task_result(
+    task_id: str,
+    bridge_root: Path | str | None = None,
+) -> dict[str, Any]:
+    """Check if a queued task has completed (fully idempotent polling).
+
+    Returns:
+      status='queued' - task not yet picked up
+      status='running' - daemon is executing
+      status='completed' - task finished; also has exit_code, stdout, stderr
+      status='unknown' - task not found
+    """
+    root = Path(bridge_root) if bridge_root else _resolve_bridge_root()
+    queue = root / "queue"
+    results = root / "results"
+    progress = root / "progress"
+
+    result_file = results / f"{task_id}.json"
+    if result_file.exists():
+        try:
+            result = json.loads(result_file.read_text())
+            return {"status": "completed", **result}
+        except json.JSONDecodeError:
+            pass
+
+    progress_file = progress / f"{task_id}.log"
+    if progress_file.exists():
+        return {
+            "status": "running",
+            "task_id": task_id,
+            "progress_available": True,
+        }
+
+    task_file = queue / f"{task_id}.json"
+    if task_file.exists():
+        return {"status": "queued", "task_id": task_id}
+
+    return {
+        "status": "unknown",
+        "task_id": task_id,
+        "message": "Task not found in queue or results",
+    }
+
+
 def call_remote(
     script: str,
     args: list[str | int | float] | None = None,
