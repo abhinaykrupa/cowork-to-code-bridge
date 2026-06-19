@@ -7,6 +7,11 @@ All notable changes to this project. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Community discussions posted** to 8 major AI framework communities: AutoGen, CrewAI, LiteLLM, LlamaIndex, Agno, DSPy, Haystack, Semantic Kernel, and Anthropic SDK Python — all with framework-specific integration patterns.
+- **GitHub topics expanded** to 20 (added: mcp, mcp-server, local-llm, llm-agents, crewai, langchain, autogen, code-execution, bridge, async) for better discoverability.
+- **README: Community & Discussions section** linking all active framework threads.
+- **Per-operation metrics and loop detection** in MCP server — `get_operation_status` now returns tool_calls, api_spend_estimate, memory_mb, cpu_percent, repeated_calls per operation.
+- **Comprehensive cancellation test suite** (6/6 scenarios: pre-execution, during-execution, post-execution, idempotent, unknown, loop detection).
 - **PyPI install path (#36).** README PyPI version + downloads badges, developer
   `pip install` docs, `install.sh` version floor `>=0.5.1`, and PyPI URL in
   `pyproject.toml`. Maintainer: follow [docs/RELEASING.md](docs/RELEASING.md) to
