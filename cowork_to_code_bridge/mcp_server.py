@@ -355,6 +355,15 @@ class MCPServer:
         if not script:
             raise ValueError("script is required")
 
+        # Fail fast on a missing script rather than dispatching and waiting
+        # for a reply that will never come (which would surface as a timeout).
+        script_path = self.bridge_root / "scripts" / script
+        if not script_path.exists():
+            return {
+                "status": "error",
+                "message": f"script not found: scripts/{script}",
+            }
+
         try:
             result = call_remote_streaming(
                 script=f"scripts/{script}",
