@@ -515,3 +515,71 @@ def test_docker_logs_container_not_found(docker_logs_script: Path) -> None:
     result = _run(docker_logs_script, "definitely-not-a-bridge-container-xyz")
     assert result.returncode == 1
     assert "not found" in result.stderr.lower()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# mac_ram.sh --json tests (issue #7 — JSON output mode)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@pytest.fixture()
+def mac_ram_script(tmp_path: Path) -> Path:
+    script = tmp_path / "mac_ram.sh"
+    script.write_text(_extract_script("mac_ram.sh", "MR"))
+    script.chmod(0o755)
+    return script
+
+
+def test_mac_ram_default_text_output(mac_ram_script: Path) -> None:
+    """Default (no flag) output is human-readable text, not JSON."""
+    result = subprocess.run(
+        [str(mac_ram_script)],
+        capture_output=True, text=True, check=False,
+        env={**os.environ, "LC_ALL": "C"},
+    )
+    assert result.returncode == 0, result.stderr
+    assert RAM_FRAGMENT in result.stdout
+    assert not result.stdout.lstrip().startswith("{"), "text mode must not emit JSON"
+
+
+def test_mac_ram_json_flag_valid_json(mac_ram_script: Path) -> None:
+    """--json flag produces valid, parseable JSON."""
+    import json
+    result = subprocess.run(
+        [str(mac_ram_script), "--json"],
+        capture_output=True, text=True, check=False,
+        env={**os.environ, "LC_ALL": "C"},
+    )
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)  # raises if invalid JSON
+    assert isinstance(data, dict)
+
+
+def test_mac_ram_json_has_required_keys(mac_ram_script: Path) -> None:
+    """--json output contains all documented fields."""
+    import json
+    result = subprocess.run(
+        [str(mac_ram_script), "--json"],
+        capture_output=True, text=True, check=False,
+        env={**os.environ, "LC_ALL": "C"},
+    )
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    required = {"total_bytes", "free_bytes", "used_bytes", "used_pct"}
+    missing = required - data.keys()
+    assert not missing, f"missing keys in JSON output: {missing}"
+
+
+def test_mac_ram_json_values_are_numeric(mac_ram_script: Path) -> None:
+    """All RAM fields are numeric; total is positive on any real machine."""
+    import json
+    result = subprocess.run(
+        [str(mac_ram_script), "--json"],
+        capture_output=True, text=True, check=False,
+        env={**os.environ, "LC_ALL": "C"},
+    )
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    for key in ("total_bytes", "free_bytes", "used_bytes", "used_pct"):
+        assert isinstance(data[key], int), f"{key} should be an int: {data[key]!r}"
+    assert data["total_bytes"] > 0
+    assert 0 <= data["used_pct"] <= 100

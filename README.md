@@ -223,7 +223,7 @@ The install gives you these to start:
 
 - `run_claude.sh` — **hands a task to Claude Code on your Mac** (the main event)
 - `mac_health.sh` — full health snapshot (CPU, memory, disk, battery, top processes)
-- `mac_ram.sh` — RAM usage
+- `mac_ram.sh` — RAM usage (add `--json` for structured `{total,free,used}_bytes` output)
 - `mac_disk.sh` — disk space
 - `mac_top.sh` — top processes by CPU and memory
 - `mac_network.sh` — network status and connectivity
