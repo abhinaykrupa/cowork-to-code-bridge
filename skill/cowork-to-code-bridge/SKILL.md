@@ -161,6 +161,7 @@ For simple, fast system queries, call a ready-made script directly:
 | "what's the git status of ~/myproject?" | `call_remote("scripts/git_status.sh", args=["/path/to/repo"])` |
 | "any outdated packages?" | `call_remote("scripts/pkg_outdated.sh")` |
 | "what MCPs do you have on your machine?" | `call_remote("scripts/mcp_audit.sh")` |
+| "stop my Rails server" / "kill pid 1234" | `call_remote("scripts/process_kill.sh", args=["rails"])` (add `"--all"` to kill every match; protected procs and PID ≤ 10 refused) |
 
 For a repeatable custom action, help the user save a small script in
 `~/.cowork-to-code-bridge/scripts/` on their Mac, then call it by name.
