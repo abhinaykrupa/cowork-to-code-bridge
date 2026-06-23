@@ -203,11 +203,8 @@ CHECKS = [
 ]
 
 
-def main() -> None:
-    print(_bold("\ncowork-to-code-bridge selfcheck"))
-    print(f"  bridge root : {BRIDGE_ROOT}")
-    print(f"  platform    : {platform.system()} {platform.machine()}\n")
-
+def run_checks() -> int:
+    """Run every check, print a row per check, and return the failure count."""
     width = max(len(label) for label, _ in CHECKS)
     failures = 0
 
@@ -222,7 +219,33 @@ def main() -> None:
         if not ok:
             failures += 1
 
+    return failures
+
+
+def main() -> None:
+    smoke = "--smoke" in sys.argv[1:]
+
+    print(_bold("\ncowork-to-code-bridge selfcheck"))
+    print(f"  bridge root : {BRIDGE_ROOT}")
+    print(f"  platform    : {platform.system()} {platform.machine()}")
+    if smoke:
+        print("  mode        : smoke (CI — checks run, install not required)")
     print()
+
+    failures = run_checks()
+    print()
+
+    if smoke:
+        # In smoke mode we only assert the selfcheck plumbing executes and
+        # every check returns a clean (ok, detail) pair — a fresh CI runner has
+        # no daemon/skill installed, so real failures here are expected and
+        # must NOT fail the job. This is what the README "selfcheck" badge
+        # tracks: the diagnostic itself runs end-to-end on macOS and Linux.
+        print(_green(f"  Smoke OK — all {len(CHECKS)} checks ran "
+                     f"({failures} would fail on this uninstalled runner)."))
+        print()
+        sys.exit(0)
+
     if failures == 0:
         print(_green("  All checks passed. Bridge is healthy."))
     else:
