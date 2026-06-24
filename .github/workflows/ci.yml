@@ -54,30 +54,9 @@ jobs:
       - name: Tests
         run: pytest -q
 
-  selfcheck:
-    # Runs the `cowork-to-code-bridge-selfcheck` diagnostic end-to-end on both
-    # OSes in --smoke mode (a fresh runner has no daemon/skill installed, so
-    # --smoke asserts the diagnostic plumbing runs and exits 0). This is the
-    # job the README "selfcheck" badge points at.
-    name: selfcheck
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, ubuntu-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install
-        run: python -m pip install -e .
-
-      - name: Run selfcheck (smoke)
-        run: cowork-to-code-bridge-selfcheck --smoke
+  # NOTE: the selfcheck diagnostic runs in its own workflow (.github/workflows/
+  # selfcheck.yml) so the README "selfcheck" badge can report its status
+  # independently of this full test matrix. Do not re-add it here.
 
   wsl-smoke:
     runs-on: windows-latest

@@ -1,0 +1,37 @@
+name: selfcheck
+
+# Standalone install-health workflow so the README "selfcheck" badge reflects
+# ONLY the diagnostic's status, independent of the full test matrix in ci.yml.
+# A GitHub workflow badge reports the whole-workflow status — a job inside ci.yml
+# could not be badged on its own, so the selfcheck job lives here in its own file.
+#
+# Runs `cowork-to-code-bridge-selfcheck --smoke` on macOS and Linux. A fresh
+# runner has no daemon/skill installed, so --smoke asserts the diagnostic
+# plumbing runs end-to-end and exits 0 (rather than failing on absent install).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  selfcheck:
+    name: selfcheck
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: python -m pip install -e .
+
+      - name: Run selfcheck (smoke)
+        run: cowork-to-code-bridge-selfcheck --smoke
