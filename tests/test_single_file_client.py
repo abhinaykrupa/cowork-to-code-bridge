@@ -85,3 +85,47 @@ def test_streaming_signature_matches_package():
         f"call_remote_streaming drifted: single-file={sorted(single_params)} "
         f"package={sorted(pkg_params)}"
     )
+
+
+# The full set of functions CLAUDE.md advertises as the bridge's public surface.
+# If the package grows or renames one of these, the single-file copy must keep up
+# or a Cowork sandbox using the fallback gets an AttributeError at call time.
+_PUBLIC_API = (
+    "queue_task",
+    "poll_task_result",
+    "call_remote",
+    "call_remote_streaming",
+    "reply_to_machine",
+    "resume_remote",
+    "daemon_alive",
+    "post_message_to_cowork",
+    "detect_messages_from_claude_code",
+)
+
+
+def test_single_file_has_full_public_api():
+    """Every public function in the package must exist in the single-file copy.
+
+    Regression guard: bridge_client.py previously lost queue_task,
+    poll_task_result, post_message_to_cowork and detect_messages_from_claude_code
+    while still claiming in its header to be "kept in sync".
+    """
+    single = _load_single()
+    missing = [name for name in _PUBLIC_API if not hasattr(single, name)]
+    assert not missing, f"bridge_client.py is missing public functions: {missing}"
+
+
+def test_single_file_signatures_match_package_for_all_public_api():
+    """Each shared public function must have identical params in both copies."""
+    single = _load_single()
+    from cowork_to_code_bridge import client as pkg
+
+    drifted = {}
+    for name in _PUBLIC_API:
+        if not (hasattr(single, name) and hasattr(pkg, name)):
+            continue
+        s = set(inspect.signature(getattr(single, name)).parameters)
+        p = set(inspect.signature(getattr(pkg, name)).parameters)
+        if s != p:
+            drifted[name] = {"single": sorted(s), "package": sorted(p)}
+    assert not drifted, f"single-file signatures drifted from package: {drifted}"
