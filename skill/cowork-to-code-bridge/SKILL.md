@@ -156,10 +156,11 @@ For simple, fast system queries, call a ready-made script directly:
 | "disk space?" | `call_remote("scripts/mac_disk.sh")` |
 | "what's using CPU?" | `call_remote("scripts/mac_top.sh")` |
 | "network status?" | `call_remote("scripts/mac_network.sh")` |
-| "what's listening on port 3000?" | `call_remote("scripts/port_check.sh", args=["3000"])` |
-| "what Docker containers are running?" | `call_remote("scripts/docker_ps.sh")` |
+| "what's listening on port 3000?" | `call_remote("scripts/port_check.sh", args=["3000"])` (add `"--json"` → `{port, listening, tool, raw}`) |
+| "what Docker containers are running?" | `call_remote("scripts/docker_ps.sh")` (add `"--json"` → `{ok, error, containers:[{name,image,status,ports}]}`) |
 | "what's the git status of ~/myproject?" | `call_remote("scripts/git_status.sh", args=["/path/to/repo"])` (add `"--json"` for a parseable `{branch, upstream, ahead, behind, clean, files:[{x,y,path}]}` object) |
-| "any outdated packages?" | `call_remote("scripts/pkg_outdated.sh")` |
+| "any outdated packages?" | `call_remote("scripts/pkg_outdated.sh")` (add `"--json"` → `{manager, count, packages, raw}`) |
+| "check the bridge environment" | `call_remote("scripts/env_check.sh")` (add `"--json"` → `{bridge_root, bridge_root_exists, bridge_token_set, claude_flags, shell, home, os, claude_cli}`) |
 | "what MCPs do you have on your machine?" | `call_remote("scripts/mcp_audit.sh")` |
 | "stop my Rails server" / "kill pid 1234" | `call_remote("scripts/process_kill.sh", args=["rails"])` (add `"--all"` to kill every match; protected procs and PID ≤ 10 refused) |
 

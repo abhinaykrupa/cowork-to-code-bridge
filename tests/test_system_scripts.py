@@ -851,3 +851,124 @@ def test_git_status_json_ahead_behind(tmp_path: Path) -> None:
     assert data["ahead"] == 1
     assert data["behind"] == 0
     assert data["upstream"]  # non-empty (e.g. origin/main)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JSON output mode for utility scripts (issue #7):
+# env_check.sh, port_check.sh, pkg_outdated.sh, docker_ps.sh
+# These run the canonical examples/allowed_scripts/ copies directly.
+# ─────────────────────────────────────────────────────────────────────────────
+
+EXAMPLES = REPO_ROOT / "examples" / "allowed_scripts"
+
+
+def _run_example(name: str, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", str(EXAMPLES / name), *args],
+        capture_output=True, text=True, check=False,
+        env={**os.environ, "LC_ALL": "C"},
+    )
+
+
+# ── env_check.sh --json ──────────────────────────────────────────────────────
+
+def test_env_check_default_is_text_not_json() -> None:
+    result = _run_example("env_check.sh")
+    assert result.returncode == 0, result.stderr
+    assert "=== BRIDGE ENVIRONMENT ===" in result.stdout
+    assert not result.stdout.lstrip().startswith("{")
+
+
+def test_env_check_json_valid_and_has_keys() -> None:
+    import json
+
+    result = _run_example("env_check.sh", "--json")
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)  # raises if invalid JSON
+    for key in (
+        "bridge_root", "bridge_root_exists", "bridge_token_set",
+        "claude_flags", "shell", "home", "os", "claude_cli",
+    ):
+        assert key in data, f"missing {key}: {data}"
+    assert isinstance(data["bridge_root_exists"], bool)
+    assert isinstance(data["bridge_token_set"], bool)
+
+
+def test_env_check_json_never_leaks_token_value() -> None:
+    import json
+
+    secret = "super-secret-token-value-xyz"
+    result = subprocess.run(
+        ["bash", str(EXAMPLES / "env_check.sh"), "--json"],
+        capture_output=True, text=True, check=False,
+        env={**os.environ, "LC_ALL": "C", "BRIDGE_TOKEN": secret},
+    )
+    assert result.returncode == 0, result.stderr
+    assert secret not in result.stdout
+    data = json.loads(result.stdout)
+    assert data["bridge_token_set"] is True
+
+
+# ── port_check.sh --json ─────────────────────────────────────────────────────
+
+def test_port_check_json_no_listener() -> None:
+    import json
+
+    # Port 65000 is almost certainly free in CI.
+    result = _run_example("port_check.sh", "65000", "--json")
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    assert data["port"] == 65000
+    assert data["listening"] is False
+    assert data["tool"] is None
+    assert data["raw"] == ""
+
+
+def test_port_check_json_flag_order_independent() -> None:
+    import json
+
+    a = _run_example("port_check.sh", "--json", "65000")
+    b = _run_example("port_check.sh", "65000", "--json")
+    assert json.loads(a.stdout)["port"] == 65000
+    assert json.loads(b.stdout)["port"] == 65000
+
+
+def test_port_check_invalid_port_still_errors() -> None:
+    result = _run_example("port_check.sh", "notanumber", "--json")
+    assert result.returncode == 2
+
+
+# ── pkg_outdated.sh --json ───────────────────────────────────────────────────
+
+def test_pkg_outdated_json_valid_shape() -> None:
+    import json
+
+    result = _run_example("pkg_outdated.sh", "--json")
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    for key in ("manager", "count", "packages", "raw"):
+        assert key in data, f"missing {key}: {data}"
+    assert isinstance(data["packages"], list)
+    assert isinstance(data["count"], int)
+    assert data["count"] == len(data["packages"])
+
+
+# ── docker_ps.sh --json ──────────────────────────────────────────────────────
+
+def test_docker_ps_json_always_valid() -> None:
+    """--json yields valid JSON whether or not docker/daemon is present."""
+    import json
+
+    result = _run_example("docker_ps.sh", "--json")
+    # rc is 0 in JSON mode even when docker is missing (error encoded in JSON).
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    assert "ok" in data and "error" in data and "containers" in data
+    assert isinstance(data["containers"], list)
+    if data["ok"]:
+        assert data["error"] is None
+        for c in data["containers"]:
+            assert {"name", "image", "status", "ports"} <= set(c)
+    else:
+        assert isinstance(data["error"], str) and data["error"]
+        assert data["containers"] == []
