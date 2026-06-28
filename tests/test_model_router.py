@@ -11,14 +11,17 @@ from pathlib import Path
 import pytest
 
 from cowork_to_code_bridge.model_router import (
+    SCOPE_TO_FLAGS,
     TIER_TO_MODEL_ID,
     FallbackStrategy,
     ModelTier,
+    PermissionScope,
     _get_cascade_order,
     _validate_model_preference,
     get_routing_metadata,
     get_routing_recommendations,
     route_task,
+    scope_to_flags,
     tier_to_model_id,
 )
 
@@ -90,6 +93,46 @@ def test_tier_to_model_id_unknown_raises():
 def test_tier_to_model_id_mapping_covers_every_tier():
     """No tier is missing from the canonical mapping."""
     assert set(TIER_TO_MODEL_ID) == set(ModelTier)
+
+
+# ─────────────────────────────────────────────────────────────────────────── #
+# Permission Scope (issue #47 — per-task sandboxing)
+# ─────────────────────────────────────────────────────────────────────────── #
+
+
+def test_scope_to_flags_all_scopes():
+    """Every scope resolves to its canonical flag list."""
+    assert scope_to_flags("plan") == ["--permission-mode", "plan"]
+    assert scope_to_flags("readonly") == ["--allowedTools", "Read,Glob,Grep"]
+    assert scope_to_flags("edit") == ["--allowedTools", "Read,Glob,Grep,Edit,Write"]
+    # 'full' means "no extra restriction" → empty flag list.
+    assert scope_to_flags("full") == []
+
+
+def test_scope_to_flags_case_insensitive_and_enum():
+    """Accepts uppercase strings and PermissionScope enum members."""
+    assert scope_to_flags("PLAN") == ["--permission-mode", "plan"]
+    assert scope_to_flags(PermissionScope.READONLY) == ["--allowedTools", "Read,Glob,Grep"]
+
+
+def test_scope_to_flags_unknown_raises():
+    """An unknown scope surfaces loudly rather than silently widening trust."""
+    with pytest.raises(ValueError, match="unknown permission scope"):
+        scope_to_flags("yolo")
+
+
+def test_scope_to_flags_mapping_covers_every_scope():
+    """No scope is missing from the canonical mapping."""
+    assert set(SCOPE_TO_FLAGS) == set(PermissionScope)
+
+
+def test_readonly_and_plan_scopes_grant_no_shell_or_write():
+    """Sandboxed scopes must never expose shell or write tools."""
+    for scope in ("plan", "readonly"):
+        flags = " ".join(scope_to_flags(scope))
+        assert "Bash" not in flags
+        assert "Write" not in flags
+        assert "Edit" not in flags
 
 
 # ─────────────────────────────────────────────────────────────────────────── #

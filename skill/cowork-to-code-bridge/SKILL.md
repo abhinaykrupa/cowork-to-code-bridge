@@ -93,14 +93,17 @@ r = call_remote(
     "scripts/run_claude.sh",
     args=["Summarise the last 10 commits", "/Users/<them>/projects/app"],
     timeout=120, idempotency_key="summarise-1",
-    permission_mode="plan",   # read-only: no edits, no shell commands
+    permission_scope="readonly",   # Read/Glob/Grep only — no edits, no shell
 )
 ```
 
-Valid `permission_mode` values (least → most permissive): `"plan"`, `"acceptEdits"`,
-`"bypassPermissions"`. The daemon enforces the owner's `BRIDGE_PERMISSION_CEILING`
-\u2014 a mode above the ceiling is rejected before any script runs. Omit `permission_mode`
-to use the owner's global `CLAUDE_FLAGS` unchanged.
+Valid `permission_scope` values (least → most permissive): `"plan"` (read +
+reason only), `"readonly"` (Read/Glob/Grep), `"edit"` (file edits, no shell),
+`"full"` (no extra restriction). The daemon resolves the scope to a vetted
+`CLAUDE_FLAGS` set from a **fixed allowlist** — a caller can never pass arbitrary
+flags, so the bridge token can't widen trust to full shell. An owner-set
+`CLAUDE_FLAGS` (in the launchd/systemd unit) always wins; omit `permission_scope`
+to use the owner's global flags unchanged.
 
 ### Long tasks — stream live progress (don't wait blind)
 

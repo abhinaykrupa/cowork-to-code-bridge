@@ -76,6 +76,7 @@ def queue_task(
     idempotency_key: str | None = None,
     plan: str | None = None,
     max_budget_usd: float | None = None,
+    permission_scope: str | None = None,
 ) -> dict[str, Any]:
     """Queue a task WITHOUT waiting for result (async, non-blocking).
 
@@ -111,6 +112,8 @@ def queue_task(
         payload["plan"] = plan
     if max_budget_usd is not None:
         payload["max_budget_usd"] = float(max_budget_usd)
+    if permission_scope is not None:
+        payload["permission_scope"] = str(permission_scope)
 
     token = _load_token(root)
     if token:
@@ -201,6 +204,7 @@ def call_remote(
     idempotency_key: str | None = None,
     plan: str | None = None,
     max_budget_usd: float | None = None,
+    permission_scope: str | None = None,
 ) -> dict[str, Any]:
     """Submit a script invocation to the Mac daemon and wait for its result.
 
@@ -231,6 +235,13 @@ def call_remote(
             can set ``BRIDGE_MAX_BUDGET_USD`` as a hard global ceiling; if
             both are present the effective limit is min(max_budget_usd,
             BRIDGE_MAX_BUDGET_USD).  Ignored for non-claude scripts.
+        permission_scope: Optional per-task permission sandbox for
+            ``run_claude.sh`` (issue #47). One of ``"plan"`` (read+reason
+            only), ``"readonly"`` (Read/Glob/Grep), ``"edit"`` (file edits, no
+            shell), or ``"full"`` (no extra restriction). The daemon resolves
+            it to ``CLAUDE_FLAGS`` from a fixed safe allowlist — a caller can
+            never pass arbitrary flags. An owner-set ``CLAUDE_FLAGS`` always
+            wins; an unknown scope is ignored. Ignored for non-claude scripts.
 
     Returns:
         Dict with keys: id, exit_code, stdout, stderr, ts_completed.
@@ -266,6 +277,8 @@ def call_remote(
         payload["plan"] = plan
     if max_budget_usd is not None:
         payload["max_budget_usd"] = float(max_budget_usd)
+    if permission_scope is not None:
+        payload["permission_scope"] = str(permission_scope)
 
     token = _load_token(root)
     if token:
@@ -310,6 +323,7 @@ def call_remote_streaming(
     plan: str | None = None,
     max_budget_usd: float | None = None,
     interactive: bool = False,
+    permission_scope: str | None = None,
 ) -> dict[str, Any]:
     """Like call_remote, but streams live output while the task runs.
 
@@ -365,6 +379,8 @@ def call_remote_streaming(
         payload["plan"] = plan
     if max_budget_usd is not None:
         payload["max_budget_usd"] = float(max_budget_usd)
+    if permission_scope is not None:
+        payload["permission_scope"] = str(permission_scope)
     token = _load_token(root)
     if token:
         payload["token"] = token

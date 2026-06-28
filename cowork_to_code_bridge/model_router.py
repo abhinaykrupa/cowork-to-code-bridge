@@ -53,6 +53,51 @@ TIER_TO_MODEL_ID: dict[ModelTier, str] = {
 }
 
 
+class PermissionScope(str, Enum):
+    """Per-task permission scope a caller may request (issue #47).
+
+    Rather than letting a caller pass arbitrary ``CLAUDE_FLAGS`` (a privilege-
+    escalation risk — the bridge token would then grant full shell), the caller
+    picks from a fixed, safe allowlist of named scopes. Each scope maps to a
+    concrete, vetted set of ``claude`` CLI flags. An owner-set ``CLAUDE_FLAGS``
+    always wins, exactly like model tier and budget.
+    """
+    PLAN = "plan"          # read + reason only; no edits, no shell
+    READONLY = "readonly"  # read-only file inspection, no edits/exec
+    EDIT = "edit"          # edit files, no shell
+    FULL = "full"          # default trust scope (no extra restriction)
+
+
+# Canonical scope → concrete `claude` CLI flag list. Single source of truth the
+# daemon and run_claude.sh rely on. Keep in sync with run_claude.sh's
+# scope_to_flags() — the shell copy exists so the script stays standalone.
+# FULL maps to no flags: it means "apply no extra restriction", deferring to the
+# owner's global CLAUDE_FLAGS (or the CLI default) rather than widening trust.
+SCOPE_TO_FLAGS: dict[PermissionScope, list[str]] = {
+    PermissionScope.PLAN: ["--permission-mode", "plan"],
+    PermissionScope.READONLY: ["--allowedTools", "Read,Glob,Grep"],
+    PermissionScope.EDIT: ["--allowedTools", "Read,Glob,Grep,Edit,Write"],
+    PermissionScope.FULL: [],
+}
+
+
+def scope_to_flags(scope: str | PermissionScope) -> list[str]:
+    """Resolve a permission scope to its `claude` CLI flag list.
+
+    Raises ValueError for an unknown scope so a typo surfaces loudly rather than
+    silently dispatching with the wrong (or no) restriction.
+    """
+    if isinstance(scope, str):
+        try:
+            scope = PermissionScope(scope.lower())
+        except ValueError:
+            valid = ", ".join(s.value for s in PermissionScope)
+            raise ValueError(
+                f"unknown permission scope {scope!r}; expected one of: {valid}"
+            ) from None
+    return SCOPE_TO_FLAGS[scope]
+
+
 def tier_to_model_id(tier: str | ModelTier) -> str:
     """Resolve a routing tier ('haiku'|'sonnet'|'opus'|'fable') to a model ID.
 

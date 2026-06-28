@@ -117,6 +117,12 @@ cd "$WORKDIR" || { log "cannot cd to $WORKDIR"; exit 1; }
 #   CLAUDE_FLAGS="--allowedTools Edit,Write,Read,Glob,Grep" # edits only, no shell
 # Unset/empty = the default (full agent). The task prompt + output format are
 # always appended and can't be overridden.
+#
+# Per-task scope (issue #47): a caller may also request a named permission_scope
+# (plan|readonly|edit|full) on the task payload. The daemon resolves it to the
+# matching CLAUDE_FLAGS via its scope→flags map — but ONLY when the owner has not
+# already set CLAUDE_FLAGS in the daemon env (owner always wins). So by the time
+# this script runs, CLAUDE_FLAGS already reflects whichever scope took effect.
 read -r -a EXTRA_FLAGS <<< "${CLAUDE_FLAGS:-}"
 
 # ── Budget cap ────────────────────────────────────────────────────────────────

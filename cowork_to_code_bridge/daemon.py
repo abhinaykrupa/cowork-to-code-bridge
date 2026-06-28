@@ -576,6 +576,39 @@ def run_one(cmd_path: Path, token_required: str | None,
             else:
                 log(f"  ! ignoring invalid model_tier={tier_raw!r}")
 
+    # ── Per-task permission scope injection (issue #47) ───────────────────────
+    # Inject CLAUDE_FLAGS from a caller-supplied permission_scope so a single task
+    # can be sandboxed (plan/readonly/edit) without the owner having to set a
+    # global CLAUDE_FLAGS. The caller picks from a fixed safe allowlist of named
+    # scopes (NOT arbitrary flags) — the scope is resolved to a vetted flag set by
+    # the router, so the bridge token can never be used to widen trust to full
+    # shell. An owner-set CLAUDE_FLAGS in the daemon env always wins (same
+    # precedence as model tier and budget); an unknown scope is ignored (logged).
+    scope_raw = cmd.get("permission_scope")
+    if scope_raw is not None:
+        if "CLAUDE_FLAGS" in env:
+            log("  ! ignoring caller permission_scope: owner CLAUDE_FLAGS is set")
+        else:
+            scope_norm = str(scope_raw).strip().lower()
+            # Canonical scope → CLAUDE_FLAGS. Kept in sync with model_router.py's
+            # SCOPE_TO_FLAGS and run_claude.sh's scope_to_flags(); inlined here so
+            # the daemon stays import-free for dispatch (same style as model_tier).
+            # 'full' maps to no flags — leave CLAUDE_FLAGS unset so the CLI default
+            # applies rather than widening trust.
+            scope_flags = {
+                "plan": "--permission-mode plan",
+                "readonly": "--allowedTools Read,Glob,Grep",
+                "edit": "--allowedTools Read,Glob,Grep,Edit,Write",
+                "full": "",
+            }
+            if scope_norm in scope_flags:
+                flags = scope_flags[scope_norm]
+                if flags:
+                    env["CLAUDE_FLAGS"] = flags
+                    log(f"  permission scope {scope_norm!r} → CLAUDE_FLAGS={flags}")
+            else:
+                log(f"  ! ignoring invalid permission_scope={scope_raw!r}")
+
     # ─── in-flight marker + journal: started ──────────────────────────────────
     # Marker is written BEFORE subprocess.run. If we crash between this point
     # and the post-run cleanup, recovery on next startup will see the marker,
