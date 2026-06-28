@@ -492,7 +492,32 @@ elif [[ -n "$OWNER_CEILING" ]]; then
   BUDGET_FLAGS=(--max-budget-usd "$OWNER_CEILING")
 fi
 
-exec "$CLAUDE_BIN" "${EXTRA_FLAGS[@]}" "${BUDGET_FLAGS[@]}" -p "$TASK" --output-format text
+# ── Model tier → --model ────────────────────────────────────────────────────
+# CLAUDE_MODEL_TIER: routing tier injected by the daemon (haiku|sonnet|opus|fable).
+# Map it to the concrete model ID the claude CLI expects. Keep in sync with
+# cowork_to_code_bridge/model_router.py's TIER_TO_MODEL_ID (the canonical source).
+# An unset/unknown tier means: don't pass --model, let the CLI pick its default.
+MODEL_FLAGS=()
+tier_to_model_id() {
+  case "$1" in
+    haiku)  echo "claude-haiku-4-5-20251001" ;;
+    sonnet) echo "claude-sonnet-4-6" ;;
+    opus)   echo "claude-opus-4-8" ;;
+    fable)  echo "claude-fable-5" ;;
+    *)      echo "" ;;
+  esac
+}
+if [[ -n "${CLAUDE_MODEL_TIER:-}" ]]; then
+  MODEL_ID="$(tier_to_model_id "$(echo "$CLAUDE_MODEL_TIER" | tr '[:upper:]' '[:lower:]')")"
+  if [[ -n "$MODEL_ID" ]]; then
+    log "model tier '$CLAUDE_MODEL_TIER' → --model $MODEL_ID"
+    MODEL_FLAGS=(--model "$MODEL_ID")
+  else
+    log "unknown CLAUDE_MODEL_TIER='$CLAUDE_MODEL_TIER' — using CLI default model"
+  fi
+fi
+
+exec "$CLAUDE_BIN" "${EXTRA_FLAGS[@]}" "${MODEL_FLAGS[@]}" "${BUDGET_FLAGS[@]}" -p "$TASK" --output-format text
 RUNCLAUDE
 chmod +x "$BRIDGE_ROOT/scripts/run_claude.sh"
 

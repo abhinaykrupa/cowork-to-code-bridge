@@ -382,6 +382,40 @@ def test_process_kill_example_matches_install_template() -> None:
     assert example.read_text() == _extract_script("process_kill.sh", "PK")
 
 
+# ── run_claude.sh model-router wiring ─────────────────────────────────────────
+# The installed run_claude.sh (the install.sh heredoc) is what runs on a real
+# machine. Its header comments are deliberately condensed vs the canonical
+# examples/ copy, so a byte-for-byte drift check would be too brittle. Instead
+# guard the behaviour that actually matters: the model tier → --model routing
+# must be present AND wired into the final exec. It silently regressed once
+# (the model router shipped to examples/ + the daemon but never to install.sh,
+# so --model was never passed on real installs).
+
+def test_install_run_claude_has_model_router() -> None:
+    body = _extract_script("run_claude.sh", "RUNCLAUDE")
+    # tier map present, all four tiers mapped to concrete model IDs
+    assert "tier_to_model_id()" in body
+    assert "claude-haiku-4-5-20251001" in body
+    assert "claude-sonnet-4-6" in body
+    assert "claude-opus-4-8" in body
+    assert "claude-fable-5" in body
+    assert "CLAUDE_MODEL_TIER" in body
+    # and actually passed to the CLI in the exec line
+    exec_line = next(line for line in body.splitlines() if line.startswith("exec "))
+    assert '"${MODEL_FLAGS[@]}"' in exec_line, (
+        f"run_claude.sh exec must pass MODEL_FLAGS, got: {exec_line}"
+    )
+
+
+def test_install_run_claude_model_map_matches_router() -> None:
+    """install.sh's tier→model map must agree with model_router.TIER_TO_MODEL_ID."""
+    from cowork_to_code_bridge.model_router import TIER_TO_MODEL_ID
+
+    body = _extract_script("run_claude.sh", "RUNCLAUDE")
+    for tier, model_id in TIER_TO_MODEL_ID.items():
+        assert model_id in body, f"{tier.value}→{model_id} missing from install.sh run_claude.sh"
+
+
 # ── newer utility scripts (list_scripts, env_check, disk_hogs, open_browser) ──
 
 NEW_SCRIPTS = [
