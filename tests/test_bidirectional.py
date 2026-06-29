@@ -207,10 +207,25 @@ def test_parallel_task_correlation(bridge_root):
 # ---------------------------------------------------------------------------
 
 def test_daemon_injects_bridge_cmd_id():
-    src = (Path(__file__).parent.parent / "daemon" / "daemon.py").read_text()
-    assert 'env["BRIDGE_CMD_ID"] = cmd_id' in src, (
-        "daemon.py must inject BRIDGE_CMD_ID into the child process environment"
+    # Assert against the CANONICAL packaged daemon — the one wired to the
+    # `cowork-to-code-bridge-daemon` console script and actually shipped. An
+    # older copy lives at daemon/daemon.py; the previous version of this test
+    # checked that stale copy, so it stayed green even when the real daemon
+    # lacked the injection (false green). Check the packaged module here, and
+    # if the legacy copy still exists, require it to match so they can't drift.
+    repo = Path(__file__).parent.parent
+    needle = 'env["BRIDGE_CMD_ID"] = cmd_id'
+    canonical = (repo / "cowork_to_code_bridge" / "daemon.py").read_text()
+    assert needle in canonical, (
+        "cowork_to_code_bridge/daemon.py (the packaged daemon) must inject "
+        "BRIDGE_CMD_ID into the child process environment"
     )
+    legacy = repo / "daemon" / "daemon.py"
+    if legacy.exists():
+        assert needle in legacy.read_text(), (
+            "daemon/daemon.py has drifted from the packaged daemon — it must "
+            "also inject BRIDGE_CMD_ID (or be removed)"
+        )
 
 
 # ---------------------------------------------------------------------------

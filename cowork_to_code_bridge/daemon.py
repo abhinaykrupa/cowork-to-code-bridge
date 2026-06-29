@@ -533,10 +533,19 @@ def run_one(cmd_path: Path, token_required: str | None,
             env[k] = str(v)
         elif k.upper() in ("CLAUDE_FLAGS", "BRIDGE_TOKEN", "BRIDGE_ROOT",
                            "BRIDGE_ALLOW_UNAUTH", "BRIDGE_MAX_TIMEOUT",
-                           "BRIDGE_MAX_BUDGET_USD"):
+                           "BRIDGE_MAX_BUDGET_USD", "BRIDGE_CMD_ID"):
             log(f"  ! blocked caller attempt to override protected env var: {k}")
         else:
             env[k] = str(v)       # non-security vars: caller wins (e.g. PYTHONPATH)
+
+    # ── Task correlation id injection (issue #72) ─────────────────────────────
+    # Inject BRIDGE_CMD_ID so a script that calls request_cowork.sh mid-task can
+    # stamp the request with its parent task id. request_cowork.sh reads this and
+    # writes it as the "parent" field of the request JSON, letting the Cowork
+    # client's interactive poll loop correlate a mid-task question back to the
+    # running task. Set AFTER the caller-env merge (and listed in the protected
+    # vars above) so a caller with the bridge token can't spoof another task's id.
+    env["BRIDGE_CMD_ID"] = cmd_id
 
     # ── Budget cap injection ──────────────────────────────────────────────────
     # Inject MAX_BUDGET_USD from the command payload into the script environment
