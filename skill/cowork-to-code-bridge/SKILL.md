@@ -148,6 +148,23 @@ print(r["exit_code"]); print(r["stdout"])
 `on_status` is called every ~2s with `{"elapsed_s": int, "last_line": str, "state": "running"|"done"|"error"}`.
 `on_progress` and `on_status` are independent — use either or both.
 
+**Async path (`queue_task` + `poll_task_result`):** when you fire-and-forget a long
+task, each `poll_task_result` while it's running now also returns the live ticker
+fields (`elapsed_s`, `last_line`, `state`) plus a ready-made `status_line` string:
+
+```python
+from cowork_to_code_bridge import queue_task, poll_task_result
+t = queue_task("scripts/run_claude.sh", args=["build my app"])
+while True:
+    s = poll_task_result(t["task_id"])
+    if s["status"] == "running":
+        print(s.get("status_line", "…running"))   # e.g. "⣾ Working… 42s elapsed"
+    elif s["status"] == "completed":
+        print(s["stdout"]); break
+```
+
+Roll your own label with `format_status_line(s, verb="Building", show_last_line=True)`.
+
 ## Step 3 — quick fixed actions (no agent needed)
 
 For simple, fast system queries, call a ready-made script directly:

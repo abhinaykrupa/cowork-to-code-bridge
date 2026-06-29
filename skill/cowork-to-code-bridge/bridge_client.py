@@ -122,6 +122,51 @@ def queue_task(
     }
 
 
+# Braille spinner frames — same set Claude Code uses for its own ticker.
+_SPINNER_FRAMES = "⣾⣽⣻⢿⡿⣟⣯⣷"
+
+
+def format_status_line(
+    status: dict[str, Any],
+    *,
+    verb: str = "Working",
+    show_last_line: bool = False,
+) -> str:
+    """Render a daemon status dict into a human-facing ticker line.
+
+    Produces strings like ``⣾ Working… 42s elapsed`` from the
+    ``progress/<id>.status.json`` payload the daemon writes (see
+    ``poll_task_result`` / ``call_remote(on_status=...)``).
+
+    Args:
+        status: a status dict with at least ``elapsed_s`` (int seconds). May
+            also carry ``last_line`` (most recent script output) and ``state``.
+        verb: the present-participle-ish label shown before the ellipsis
+            (e.g. "Building", "Running tests"). Ignored once the task reports
+            a terminal ``state`` of "done"/"failed".
+        show_last_line: when True, append the script's most recent output line.
+
+    The spinner frame is chosen from ``elapsed_s`` so successive polls advance
+    it without the client tracking any frame counter.
+    """
+    elapsed = int(status.get("elapsed_s", 0) or 0)
+    state = status.get("state", "running")
+
+    if state == "done":
+        head = f"✓ Done in {elapsed}s"
+    elif state == "failed":
+        head = f"✗ Failed after {elapsed}s"
+    else:
+        frame = _SPINNER_FRAMES[elapsed % len(_SPINNER_FRAMES)]
+        head = f"{frame} {verb}… {elapsed}s elapsed"
+
+    if show_last_line:
+        last = str(status.get("last_line", "")).strip()
+        if last:
+            head = f"{head}  ·  {last}"
+    return head
+
+
 def poll_task_result(
     task_id: str,
     bridge_root: Path | str | None = None,
@@ -149,11 +194,27 @@ def poll_task_result(
 
     progress_file = progress / f"{task_id}.log"
     if progress_file.exists():
-        return {
+        running: dict[str, Any] = {
             "status": "running",
             "task_id": task_id,
             "progress_available": True,
         }
+        # Surface the daemon's live status ticker (elapsed_s / last_line /
+        # state), written atomically to progress/<id>.status.json every ~2s.
+        # This lets the non-blocking queue_task + poll_task_result flow show a
+        # spinner without tailing the raw log. Best-effort: a missing or
+        # half-written file just means no ticker this poll.
+        status_file = progress / f"{task_id}.status.json"
+        try:
+            status = json.loads(status_file.read_text())
+            if isinstance(status, dict):
+                for key in ("elapsed_s", "last_line", "state"):
+                    if key in status:
+                        running[key] = status[key]
+                running["status_line"] = format_status_line(status)
+        except (OSError, json.JSONDecodeError):
+            pass
+        return running
 
     task_file = queue / f"{task_id}.json"
     if task_file.exists():

@@ -5,7 +5,18 @@ that polls a shared bind-mounted directory. MIT licensed.
 """
 from __future__ import annotations
 
-from .client import call_remote, call_remote_streaming, daemon_alive
+from .client import (
+    call_remote,
+    call_remote_streaming,
+    daemon_alive,
+    format_status_line,
+)
 
 __version__ = "0.5.1"
-__all__ = ["call_remote", "call_remote_streaming", "daemon_alive", "__version__"]
+__all__ = [
+    "call_remote",
+    "call_remote_streaming",
+    "daemon_alive",
+    "format_status_line",
+    "__version__",
+]

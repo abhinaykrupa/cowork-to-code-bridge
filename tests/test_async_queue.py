@@ -13,7 +13,11 @@ from pathlib import Path
 
 import pytest
 
-from cowork_to_code_bridge.client import poll_task_result, queue_task
+from cowork_to_code_bridge.client import (
+    format_status_line,
+    poll_task_result,
+    queue_task,
+)
 
 
 @pytest.fixture
@@ -86,6 +90,85 @@ def test_poll_task_result_running(bridge_root):
 
     assert result["status"] == "running"
     assert result["progress_available"] is True
+
+
+def test_poll_task_result_running_surfaces_status_ticker(bridge_root):
+    """When the daemon has written status.json, poll exposes the live ticker."""
+    queued = queue_task("scripts/build.sh", bridge_root=bridge_root)
+    task_id = queued["task_id"]
+
+    progress = bridge_root / "progress"
+    (progress / f"{task_id}.log").write_text("Building...\n")
+    (progress / f"{task_id}.status.json").write_text(
+        json.dumps({"elapsed_s": 42, "last_line": "Compiling foo.c", "state": "running"})
+    )
+
+    result = poll_task_result(task_id, bridge_root=bridge_root)
+
+    assert result["status"] == "running"
+    assert result["elapsed_s"] == 42
+    assert result["last_line"] == "Compiling foo.c"
+    assert result["state"] == "running"
+    assert "42s elapsed" in result["status_line"]
+
+
+def test_poll_task_result_running_without_status_file(bridge_root):
+    """A missing status.json is fine — running result just omits ticker keys."""
+    queued = queue_task("scripts/long.sh", bridge_root=bridge_root)
+    task_id = queued["task_id"]
+    (bridge_root / "progress" / f"{task_id}.log").write_text("step 1\n")
+
+    result = poll_task_result(task_id, bridge_root=bridge_root)
+
+    assert result["status"] == "running"
+    assert "status_line" not in result
+    assert "elapsed_s" not in result
+
+
+def test_poll_task_result_ignores_corrupt_status_file(bridge_root):
+    """A half-written status.json must not break polling."""
+    queued = queue_task("scripts/long.sh", bridge_root=bridge_root)
+    task_id = queued["task_id"]
+    progress = bridge_root / "progress"
+    (progress / f"{task_id}.log").write_text("step 1\n")
+    (progress / f"{task_id}.status.json").write_text('{"elapsed_s": 5, ')  # truncated
+
+    result = poll_task_result(task_id, bridge_root=bridge_root)
+
+    assert result["status"] == "running"
+    assert "status_line" not in result
+
+
+def test_format_status_line_running():
+    line = format_status_line({"elapsed_s": 42, "state": "running"}, verb="Building")
+    assert "Building…" in line
+    assert "42s elapsed" in line
+    # leading char is a braille spinner frame, not ASCII
+    assert line[0] in "⣾⣽⣻⢿⡿⣟⣯⣷"
+
+
+def test_format_status_line_spinner_advances_with_elapsed():
+    a = format_status_line({"elapsed_s": 0})
+    b = format_status_line({"elapsed_s": 1})
+    assert a[0] != b[0]
+
+
+def test_format_status_line_terminal_states():
+    assert "Done in 10s" in format_status_line({"elapsed_s": 10, "state": "done"})
+    assert "Failed after 7s" in format_status_line({"elapsed_s": 7, "state": "failed"})
+
+
+def test_format_status_line_show_last_line():
+    line = format_status_line(
+        {"elapsed_s": 3, "last_line": "Compiling foo.c", "state": "running"},
+        show_last_line=True,
+    )
+    assert "Compiling foo.c" in line
+
+
+def test_format_status_line_handles_missing_elapsed():
+    # Defensive: empty/garbage dict must not raise.
+    assert "0s elapsed" in format_status_line({})
 
 
 def test_poll_task_result_completed(bridge_root):

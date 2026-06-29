@@ -100,6 +100,7 @@ _PUBLIC_API = (
     "daemon_alive",
     "post_message_to_cowork",
     "detect_messages_from_claude_code",
+    "format_status_line",
 )
 
 
