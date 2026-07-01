@@ -468,6 +468,40 @@ def test_list_scripts_enumerates_dir(new_scripts: Path) -> None:
     assert "list_scripts.sh " not in result.stdout
 
 
+def test_list_scripts_json_flag_valid_json(new_scripts: Path) -> None:
+    """--json flag produces valid, parseable JSON with the documented shape."""
+    import json
+
+    result = _run(new_scripts / "list_scripts.sh", "--json")
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)  # raises if invalid JSON
+    assert isinstance(data["scripts"], list)
+    assert data["count"] == len(data["scripts"])
+    names = {s["name"] for s in data["scripts"]}
+    assert "ping.sh" in names
+    assert "env_check.sh" in names
+    # every entry has both documented keys
+    for entry in data["scripts"]:
+        assert set(entry.keys()) == {"name", "description"}
+
+
+def test_list_scripts_json_excludes_self(new_scripts: Path) -> None:
+    """--json must not list list_scripts.sh itself (same as text mode)."""
+    import json
+
+    data = json.loads(_run(new_scripts / "list_scripts.sh", "--json").stdout)
+    assert "list_scripts.sh" not in {s["name"] for s in data["scripts"]}
+
+
+def test_list_scripts_json_descriptions_match_first_comment(new_scripts: Path) -> None:
+    """ping.sh's description in JSON is the first comment line after the shebang."""
+    import json
+
+    data = json.loads(_run(new_scripts / "list_scripts.sh", "--json").stdout)
+    ping = next(s for s in data["scripts"] if s["name"] == "ping.sh")
+    assert ping["description"] == "ping.sh — health check."
+
+
 def test_env_check_reports_without_leaking_token(new_scripts: Path) -> None:
     secret = "SUPERSECRETTOKENVALUE12345"
     env = {**os.environ, "LC_ALL": "C", "BRIDGE_TOKEN": secret}

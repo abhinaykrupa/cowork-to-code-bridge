@@ -232,7 +232,7 @@ The install gives you these to start:
 - `docker_logs.sh` — tail a container's logs (optional line count, default 50)
 - `git_status.sh` — `git status --short --branch` in any repo directory (pass the path as an argument)
 - `pkg_outdated.sh` — lists outdated packages (brew on macOS; apt/dnf/yum/pacman on Linux)
-- `list_scripts.sh` — lists every script the bridge can run, with descriptions (so Cowork can discover what's available)
+- `list_scripts.sh` — lists every script the bridge can run, with descriptions (so Cowork can discover what's available); pass `--json` for a machine-parseable catalog
 - `env_check.sh` — shows key environment values (PATH, `BRIDGE_ROOT`, `CLAUDE_FLAGS`, `claude` CLI) without leaking your token
 - `disk_hogs.sh` — biggest files/folders in a path (pass a directory and an optional count)
 - `open_browser.sh` — opens an `http(s)`/localhost URL in your default browser (handy after a local dev server starts)
