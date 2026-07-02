@@ -43,3 +43,21 @@ Initialization functions live in
 **Rule of thumb:** if work might take longer than ~30s, `queue_task` it rather
 than blocking with `call_remote`. Pass an `idempotency_key` for state-changing
 work so retries don't double-fire.
+
+
+## Model-tiered delegation (hard rule — applies to every conversation, Abhi 2026-07-02)
+
+Never burn frontier-model quota on work a cheaper tier handles. Every subagent/Task
+delegation MUST carry a model override:
+
+| Tier | Model | Use for |
+|---|---|---|
+| 0 | no LLM | polling, status checks, test runs, deploys — scripts only |
+| 1 | haiku | triage, summaries, classification, boilerplate |
+| 2 | sonnet (DEFAULT for delegation) | coding, tests, refactors, debugging, PR fixes |
+| 3 | opus | multi-file design, architecture, tricky cross-module debugging |
+| 4 | frontier (main thread) | orchestration, synthesis, verifying workers' diffs, high-stakes decisions |
+
+Verification at a higher tier is MANDATORY on every delegated result. Fallback: retry
+once same tier -> escalate one tier -> after 2 escalations stop and ask the human.
+Never a single lane, never silent.

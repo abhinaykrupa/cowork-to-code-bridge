@@ -250,7 +250,9 @@ def route_task(
         "ts_routed": time.time(),
     }
 
-    # Queue the task via standard bridge mechanism
+    # Queue the task via standard bridge mechanism. model_tier is the payload
+    # key the daemon reads to inject CLAUDE_MODEL_TIER into the child env
+    # (run_claude.sh maps it to a concrete --model ID).
     result = _queue_task(
         script=script,
         args=args or [],
@@ -259,6 +261,7 @@ def route_task(
         cwd=cwd,
         env=env,
         idempotency_key=idempotency_key,
+        model_tier=selected_tier.value,
     )
 
     # Enhance result with routing information
@@ -269,9 +272,14 @@ def route_task(
         "routing_metadata": routing_metadata,
     })
 
-    # Also persist routing metadata in the queued task file for the daemon
-    if bridge_root:
-        _persist_routing_metadata(bridge_root, result["task_id"], routing_metadata)
+    # Also persist routing metadata alongside the queue for post-hoc audit.
+    from cowork_to_code_bridge.client import _resolve_bridge_root
+
+    _persist_routing_metadata(
+        Path(bridge_root) if bridge_root else _resolve_bridge_root(),
+        result["task_id"],
+        routing_metadata,
+    )
 
     return result
 
