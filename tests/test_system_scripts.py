@@ -1076,3 +1076,279 @@ def test_docker_ps_json_always_valid() -> None:
     else:
         assert isinstance(data["error"], str) and data["error"]
         assert data["containers"] == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# mcp_audit.sh tests (issue #46 — zero coverage)
+# ─────────────────────────────────────────────────────────────────────────────
+
+MCP_AUDIT_SCRIPTS = [
+    ("mcp_audit.sh", "MCPAUDIT"),
+]
+
+
+@pytest.mark.parametrize(("script_name", "marker"), MCP_AUDIT_SCRIPTS)
+def test_mcp_audit_example_matches_install_template(script_name: str, marker: str) -> None:
+    """examples/allowed_scripts/mcp_audit.sh must be identical to the install.sh heredoc."""
+    example_path = REPO_ROOT / "examples" / "allowed_scripts" / script_name
+    assert example_path.read_text() == _extract_script(script_name, marker)
+
+
+@pytest.fixture()
+def mcp_audit_script(tmp_path: Path) -> Path:
+    script = tmp_path / "mcp_audit.sh"
+    script.write_text(_extract_script("mcp_audit.sh", "MCPAUDIT"))
+    script.chmod(0o755)
+    return script
+
+
+def _fake_bin_dir_with_claude(tmp_path: Path, claude_body: str) -> Path:
+    """Write a fake `claude` executable into its own dir for prepending to PATH."""
+    fake_bin = tmp_path / "fake_bin"
+    fake_bin.mkdir()
+    fake_claude = fake_bin / "claude"
+    fake_claude.write_text(claude_body)
+    fake_claude.chmod(0o755)
+    return fake_bin
+
+
+def _run_mcp_audit(script: Path, fake_bin: Path | None) -> subprocess.CompletedProcess[str]:
+    env = {**os.environ, "LC_ALL": "C"}
+    if fake_bin is not None:
+        env["PATH"] = f"{fake_bin}:{os.environ['PATH']}"
+    return subprocess.run(
+        [str(script)], capture_output=True, text=True, check=False, env=env,
+    )
+
+
+# ── claude-not-found path ───────────────────────────────────────────────────
+# find_claude() falls back to hardcoded absolute paths (e.g.
+# /opt/homebrew/bin/claude, /usr/local/bin/claude, $HOME/.local/bin/claude,
+# $HOME/.claude/bin/claude) in addition to `command -v claude`. On a dev Mac
+# that already has Claude Code installed, one or more of those may be real
+# executables, which would make a naive "hide claude from PATH" test flaky
+# (it would find the real binary via the fallback path instead of failing).
+# Only run this test when none of those fallback locations are executable.
+_CLAUDE_FALLBACK_PATHS = [
+    Path("/opt/homebrew/bin/claude"),
+    Path("/usr/local/bin/claude"),
+    Path.home() / ".local" / "bin" / "claude",
+    Path.home() / ".claude" / "bin" / "claude",
+]
+
+
+def _any_real_claude_fallback_present() -> bool:
+    return any(p.is_file() and os.access(p, os.X_OK) for p in _CLAUDE_FALLBACK_PATHS)
+
+
+@pytest.mark.skipif(
+    _any_real_claude_fallback_present(),
+    reason=(
+        "a real `claude` binary exists at one of find_claude()'s hardcoded "
+        "fallback paths on this machine, which would make this test flaky"
+    ),
+)
+def test_mcp_audit_claude_not_found(mcp_audit_script: Path, tmp_path: Path) -> None:
+    """When no claude CLI is found anywhere, exit 127 with a JSON error key."""
+    empty_bin = tmp_path / "empty_bin"
+    empty_bin.mkdir()
+    result = subprocess.run(
+        [str(mcp_audit_script)],
+        capture_output=True, text=True, check=False,
+        env={**os.environ, "LC_ALL": "C", "PATH": str(empty_bin), "HOME": str(tmp_path)},
+    )
+    assert result.returncode == 127
+    data = json.loads(result.stdout)
+    assert "error" in data
+
+
+# ── JSON-supporting claude ──────────────────────────────────────────────────
+
+def test_mcp_audit_json_supporting_claude(mcp_audit_script: Path, tmp_path: Path) -> None:
+    mcps = [
+        {"scope": "user", "name": "github", "type": "stdio", "command": "npx github-mcp"},
+        {"scope": "project", "name": "slack", "type": "stdio", "command": "npx slack-mcp"},
+    ]
+    mcps_json = json.dumps(mcps).replace("'", "'\\''")
+    fake_claude_body = f"""#!/usr/bin/env bash
+if [[ "$1" == "--version" ]]; then
+  echo "1.2.3 (Claude Code)"
+  exit 0
+fi
+if [[ "$1" == "mcp" && "$2" == "list" && "$3" == "--output-format" && "$4" == "json" ]]; then
+  printf '%s' '{mcps_json}'
+  exit 0
+fi
+exit 1
+"""
+    fake_bin = _fake_bin_dir_with_claude(tmp_path, fake_claude_body)
+    result = _run_mcp_audit(mcp_audit_script, fake_bin)
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)  # raises if invalid JSON
+    for key in ("claude_version", "hostname", "timestamp", "mcp_count", "mcps"):
+        assert key in data, f"missing {key!r}: {data}"
+    assert data["mcps"] == mcps
+    assert data["mcp_count"] == len(mcps)
+
+
+# ── plain-text fallback ──────────────────────────────────────────────────────
+
+def test_mcp_audit_plain_text_fallback(mcp_audit_script: Path, tmp_path: Path) -> None:
+    fake_claude_body = """#!/usr/bin/env bash
+if [[ "$1" == "--version" ]]; then
+  echo "0.9.0 (Claude Code)"
+  exit 0
+fi
+if [[ "$1" == "mcp" && "$2" == "list" && "$3" == "--output-format" && "$4" == "json" ]]; then
+  echo "error: unrecognised flag --output-format" >&2
+  exit 1
+fi
+if [[ "$1" == "mcp" && "$2" == "list" ]]; then
+  echo "github: npx github-mcp (stdio) - user scope"
+  echo "slack: npx slack-mcp (stdio) - project scope"
+  exit 0
+fi
+exit 1
+"""
+    fake_bin = _fake_bin_dir_with_claude(tmp_path, fake_claude_body)
+    result = _run_mcp_audit(mcp_audit_script, fake_bin)
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)  # raises if invalid JSON
+    assert "mcps_raw" in data
+    assert "note" in data
+    assert "mcps" not in data
+    assert "github: npx github-mcp" in data["mcps_raw"]
+
+
+# ── mcp_audit.sh (#46 — cross-surface MCP audit) ─────────────────────────────
+#
+# The script shells out to a `claude` binary it discovers on PATH (or a set of
+# hardcoded fallback locations), then wraps `claude mcp list` output as JSON.
+# Tests inject a fake `claude` on PATH — same pattern as the process_kill fake
+# `kill`/`pgrep` — so behavior is exercised without a real Claude Code install.
+
+MCP_AUDIT_SCRIPTS = [
+    ("mcp_audit.sh", "MCPAUDIT"),
+]
+
+# The find_claude() fallback probes these absolute paths before giving up. The
+# "not found" test is only meaningful when none of them resolve on this machine.
+_MCP_AUDIT_FALLBACK_PATHS = [
+    "/opt/homebrew/bin/claude",
+    "/usr/local/bin/claude",
+    str(Path.home() / ".local/bin/claude"),
+    str(Path.home() / ".claude/bin/claude"),
+]
+
+
+@pytest.mark.parametrize(("script_name", "marker"), MCP_AUDIT_SCRIPTS)
+def test_mcp_audit_example_matches_install_template(script_name: str, marker: str) -> None:
+    """The examples/ copy must be byte-identical to the install.sh heredoc."""
+    example_path = REPO_ROOT / "examples" / "allowed_scripts" / script_name
+    assert example_path.read_text() == _extract_script(script_name, marker)
+
+
+def _fake_claude(bin_dir: Path, *, version: str, json_ok: bool, mcps: list | None = None,
+                 plain: str = "") -> None:
+    """Write a fake `claude` into bin_dir.
+
+    version   — what `claude --version` prints.
+    json_ok   — if True, `mcp list --output-format json` prints valid JSON (the
+                given `mcps` list); if False, it exits 1 so the script takes the
+                plain-text fallback path.
+    plain     — what `claude mcp list` prints in the fallback branch.
+    """
+    import json as _json
+
+    mcps_literal = _json.dumps(mcps or [])
+    body = f"""#!/usr/bin/env bash
+if [[ "$1" == "--version" ]]; then
+  echo "{version}"
+  exit 0
+fi
+if [[ "$1" == "mcp" && "$2" == "list" ]]; then
+  if [[ "$3" == "--output-format" && "$4" == "json" ]]; then
+"""
+    if json_ok:
+        body += f"    printf '%s' '{mcps_literal}'\n    exit 0\n"
+    else:
+        body += "    exit 1\n"
+    body += f"""  fi
+  printf '%s\\n' {plain!r}
+  exit 0
+fi
+exit 0
+"""
+    fake = bin_dir / "claude"
+    fake.write_text(body)
+    fake.chmod(0o755)
+
+
+def _run_mcp_audit(bin_dir: Path) -> subprocess.CompletedProcess[str]:
+    # Prepend bin_dir so our fake `claude` (and the real python3) both resolve.
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}", "LC_ALL": "C"}
+    return subprocess.run(
+        ["bash", str(EXAMPLES / "mcp_audit.sh")],
+        capture_output=True, text=True, check=False, env=env,
+    )
+
+
+def test_mcp_audit_json_mode_wraps_registry(tmp_path: Path) -> None:
+    """A JSON-capable claude yields a wrapped audit with count + registry list."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    mcps = [
+        {"scope": "user", "name": "github", "type": "stdio", "command": "gh-mcp"},
+        {"scope": "project", "name": "fs", "type": "stdio", "command": "fs-mcp"},
+    ]
+    _fake_claude(bin_dir, version="1.2.3 (Claude Code)", json_ok=True, mcps=mcps)
+    result = _run_mcp_audit(bin_dir)
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    for key in ("claude_version", "hostname", "timestamp", "mcp_count", "mcps"):
+        assert key in data, f"missing {key}: {data}"
+    assert data["mcps"] == mcps
+    assert data["mcp_count"] == len(mcps)
+    assert "1.2.3" in data["claude_version"]
+    assert "mcps_raw" not in data
+
+
+def test_mcp_audit_plaintext_fallback(tmp_path: Path) -> None:
+    """When JSON output isn't supported, the plain-text list is wrapped verbatim."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    plain = "github: gh-mcp (stdio)\nfs: fs-mcp (stdio)"
+    _fake_claude(bin_dir, version="0.9.0", json_ok=False, plain=plain)
+    result = _run_mcp_audit(bin_dir)
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    assert "mcps_raw" in data
+    assert "note" in data
+    assert "mcps" not in data
+    assert "github: gh-mcp" in data["mcps_raw"]
+
+
+@pytest.mark.skipif(
+    any(Path(p).exists() for p in _MCP_AUDIT_FALLBACK_PATHS),
+    reason="a real claude binary exists at a hardcoded fallback path; not-found is unreachable",
+)
+def test_mcp_audit_claude_not_found(tmp_path: Path) -> None:
+    """No claude anywhere → JSON error object and exit 127."""
+    empty_bin = tmp_path / "onlybin"
+    empty_bin.mkdir()
+    # Restrict PATH to a dir with python3 but no claude. Locate python3 so the
+    # script's internal `python3 -c ...` still resolves.
+    import shutil
+
+    py = shutil.which("python3")
+    assert py, "python3 must be discoverable for this test"
+    (empty_bin / "python3").symlink_to(py)
+    env = {"PATH": str(empty_bin), "LC_ALL": "C", "HOME": str(tmp_path)}
+    result = subprocess.run(
+        ["bash", str(EXAMPLES / "mcp_audit.sh")],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert result.returncode == 127, (result.returncode, result.stdout, result.stderr)
+    data = json.loads(result.stdout)
+    assert "error" in data
+    assert data.get("mcps") == []
