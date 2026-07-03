@@ -416,6 +416,42 @@ def test_install_run_claude_model_map_matches_router() -> None:
         assert model_id in body, f"{tier.value}→{model_id} missing from install.sh run_claude.sh"
 
 
+# The tier→model map is duplicated in three places that all ship to a real
+# machine: the install.sh heredoc, examples/allowed_scripts/run_claude.sh, and
+# bridge/scripts/run_claude.sh. The presence check above (`model_id in body`)
+# is too weak — it passes even if an arm is mis-wired (e.g. `sonnet) echo
+# "claude-opus-4-8"`), because both strings still appear somewhere in the file.
+# Guard the exact `<tier>) echo "<id>"` pairing in every copy instead, so a
+# stale model id or a swapped arm fails CI rather than silently dispatching the
+# wrong model.
+
+# Each copy's tier map; (path, is_heredoc). The install.sh copy lives inside a
+# heredoc so we extract it; the other two are standalone files read directly.
+_RUN_CLAUDE_COPIES = [
+    (INSTALL_SH, True),
+    (REPO_ROOT / "examples" / "allowed_scripts" / "run_claude.sh", False),
+    (REPO_ROOT / "bridge" / "scripts" / "run_claude.sh", False),
+]
+
+
+@pytest.mark.parametrize(("path", "is_heredoc"), _RUN_CLAUDE_COPIES)
+def test_run_claude_copies_pair_each_tier_to_correct_model(path: Path, is_heredoc: bool) -> None:
+    """Every run_claude.sh copy must pair each tier to the router's exact model id."""
+    import re
+
+    from cowork_to_code_bridge.model_router import TIER_TO_MODEL_ID
+
+    body = _extract_script("run_claude.sh", "RUNCLAUDE") if is_heredoc else path.read_text()
+    for tier, model_id in TIER_TO_MODEL_ID.items():
+        # Match the case arm `haiku)  echo "claude-haiku-4-5-20251001"`, tolerant
+        # of the whitespace alignment used across the copies.
+        arm = re.compile(rf'{re.escape(tier.value)}\)\s+echo\s+"{re.escape(model_id)}"')
+        assert arm.search(body), (
+            f"{path.name}: tier '{tier.value}' is not paired to '{model_id}' "
+            f"(expected an arm like `{tier.value}) echo \"{model_id}\"`)"
+        )
+
+
 # ── newer utility scripts (list_scripts, env_check, disk_hogs, open_browser) ──
 
 NEW_SCRIPTS = [
