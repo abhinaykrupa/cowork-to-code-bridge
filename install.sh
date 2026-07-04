@@ -824,16 +824,29 @@ MN
 cat > "$BRIDGE_ROOT/scripts/port_check.sh" <<'PC'
 #!/usr/bin/env bash
 # port_check.sh — show what is listening on a TCP port (macOS or Linux).
-# Args: port number, e.g. 3000.
+# Usage: port_check.sh PORT [--json]
+#   (no flag)   human-readable text (default)
+#   --json      structured JSON — parse with json.loads() in Cowork
+# JSON fields: port (int), listening (bool), tool (lsof|ss|netstat|null),
+#   raw (the captured listener lines as a string; "" when nothing is listening).
 set -u
 
+JSON=0
+PORT=""
+for arg in "$@"; do
+  if [ "$arg" = "--json" ]; then
+    JSON=1
+  else
+    PORT="$arg"
+  fi
+done
+
 usage() {
-  echo "Usage: $0 PORT" >&2
+  echo "Usage: $0 PORT [--json]" >&2
   echo "PORT must be a number from 1 to 65535." >&2
   exit 2
 }
 
-PORT="${1:-}"
 case "$PORT" in
   ""|*[!0-9]*) usage ;;
 esac
@@ -842,33 +855,43 @@ if [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
   usage
 fi
 
-echo "=== TCP LISTENERS ON PORT $PORT ==="
 found=0
+tool=""
+raw=""
 
 if command -v lsof >/dev/null 2>&1; then
-  if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null; then
-    found=1
-  fi
+  raw="$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null || true)"
+  if [ -n "$raw" ]; then found=1; tool="lsof"; fi
 fi
 
 if [ "$found" -eq 0 ] && command -v ss >/dev/null 2>&1; then
-  ss_output="$(ss -H -ltnp "sport = :$PORT" 2>/dev/null || true)"
-  if [ -n "$ss_output" ]; then
-    echo "State Recv-Q Send-Q Local Address:Port Peer Address:Port Process"
-    echo "$ss_output"
-    found=1
-  fi
+  raw="$(ss -H -ltnp "sport = :$PORT" 2>/dev/null || true)"
+  if [ -n "$raw" ]; then found=1; tool="ss"; fi
 fi
 
 if [ "$found" -eq 0 ] && command -v netstat >/dev/null 2>&1; then
-  netstat_output="$(netstat -an 2>/dev/null | grep -E "([.:])${PORT}[[:space:]].*LISTEN" || true)"
-  if [ -n "$netstat_output" ]; then
-    echo "$netstat_output"
-    found=1
-  fi
+  raw="$(netstat -an 2>/dev/null | grep -E "([.:])${PORT}[[:space:]].*LISTEN" || true)"
+  if [ -n "$raw" ]; then found=1; tool="netstat"; fi
 fi
 
-if [ "$found" -eq 0 ]; then
+if [ "$JSON" -eq 1 ]; then
+  jesc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | awk 'BEGIN{ORS=""} {if(NR>1) printf "\\n"; print}'; }
+  bool() { [ "$1" -eq 1 ] && printf 'true' || printf 'false'; }
+  tool_json() { if [ -z "$tool" ]; then printf 'null'; else printf '"%s"' "$tool"; fi; }
+  printf '{\n'
+  printf '  "port": %s,\n' "$PORT"
+  printf '  "listening": %s,\n' "$(bool "$found")"
+  printf '  "tool": %s,\n' "$(tool_json)"
+  printf '  "raw": "%s"\n' "$(jesc "$raw")"
+  printf '}\n'
+  exit 0
+fi
+
+echo "=== TCP LISTENERS ON PORT $PORT ==="
+if [ "$found" -eq 1 ]; then
+  [ "$tool" = "ss" ] && echo "State Recv-Q Send-Q Local Address:Port Peer Address:Port Process"
+  echo "$raw"
+else
   echo "No TCP listener found on port $PORT."
 fi
 
@@ -877,17 +900,53 @@ PC
 cat > "$BRIDGE_ROOT/scripts/docker_ps.sh" <<'DPS'
 #!/usr/bin/env bash
 # docker_ps.sh — list running Docker containers (macOS or Linux).
-# Args: none.
+# Usage: docker_ps.sh [--json]
+#   (no flag)   human-readable table (default)
+#   --json      structured JSON — parse with json.loads() in Cowork
+# JSON shape: {"ok": bool, "error": str|null, "containers": [{name,image,status,ports}, ...]}
 set -u
 
-if ! command -v docker >/dev/null 2>&1; then
-  echo "Docker is not installed or not in PATH." >&2
+JSON=0
+for arg in "$@"; do [ "$arg" = "--json" ] && JSON=1; done
+
+emit_error() {
+  # $1 = error message
+  if [ "$JSON" -eq 1 ]; then
+    esc="$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+    printf '{\n  "ok": false,\n  "error": "%s",\n  "containers": []\n}\n' "$esc"
+    exit 0
+  fi
+  echo "$1" >&2
   exit 1
+}
+
+if ! command -v docker >/dev/null 2>&1; then
+  emit_error "Docker is not installed or not in PATH."
 fi
 
 if ! docker info >/dev/null 2>&1; then
-  echo "Docker is installed but the daemon is not running or not reachable." >&2
-  exit 1
+  emit_error "Docker is installed but the daemon is not running or not reachable."
+fi
+
+if [ "$JSON" -eq 1 ]; then
+  # docker emits one JSON object per running container; wrap them into an array.
+  first=1
+  printf '{\n  "ok": true,\n  "error": null,\n  "containers": ['
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    name="$(printf '%s' "$line"  | sed -n 's/.*"Names":"\([^"]*\)".*/\1/p')"
+    image="$(printf '%s' "$line" | sed -n 's/.*"Image":"\([^"]*\)".*/\1/p')"
+    status="$(printf '%s' "$line"| sed -n 's/.*"Status":"\([^"]*\)".*/\1/p')"
+    ports="$(printf '%s' "$line" | sed -n 's/.*"Ports":"\([^"]*\)".*/\1/p')"
+    esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+    [ "$first" -eq 1 ] && first=0 || printf ','
+    printf '\n    {"name": "%s", "image": "%s", "status": "%s", "ports": "%s"}' \
+      "$(esc "$name")" "$(esc "$image")" "$(esc "$status")" "$(esc "$ports")"
+  done <<EOF
+$(docker ps --format '{{json .}}' 2>/dev/null)
+EOF
+  [ "$first" -eq 1 ] && printf ']\n}\n' || printf '\n  ]\n}\n'
+  exit 0
 fi
 
 echo "=== RUNNING DOCKER CONTAINERS ==="
@@ -1268,47 +1327,85 @@ cat > "$BRIDGE_ROOT/scripts/pkg_outdated.sh" <<'POD'
 #!/usr/bin/env bash
 # pkg_outdated.sh — list outdated system packages (macOS or Linux).
 # Detects the package manager: brew on macOS; apt/dnf/yum/pacman on Linux.
-# Args: none.
+# Usage: pkg_outdated.sh [--json]
+#   (no flag)   human-readable text (default)
+#   --json      structured JSON — parse with json.loads() in Cowork
+# JSON fields: manager (brew|apt|dnf|yum|pacman|null), count (int),
+#   packages (array of package-name strings, best-effort), raw (full output).
 set -u
 
-echo "=== OUTDATED PACKAGES ==="
-found=0
+JSON=0
+for arg in "$@"; do [ "$arg" = "--json" ] && JSON=1; done
+
+manager=""
+raw=""
 
 if command -v brew >/dev/null 2>&1; then
-  echo "--- Homebrew (brew outdated) ---"
-  brew outdated || true
-  found=1
-fi
-
-if [ "$found" -eq 0 ] && command -v apt >/dev/null 2>&1; then
-  echo "--- APT (apt list --upgradable) ---"
-  apt list --upgradable 2>/dev/null || true
-  found=1
-fi
-
-if [ "$found" -eq 0 ] && command -v dnf >/dev/null 2>&1; then
-  echo "--- DNF (dnf check-update) ---"
+  manager="brew"
+  raw="$(brew outdated 2>/dev/null || true)"
+elif command -v apt >/dev/null 2>&1; then
+  manager="apt"
+  # Drop the "Listing..." header line apt prints to stdout.
+  raw="$(apt list --upgradable 2>/dev/null | grep -v '^Listing' || true)"
+elif command -v dnf >/dev/null 2>&1; then
+  manager="dnf"
   # dnf check-update exits 100 when updates exist; don't treat that as an error.
-  dnf check-update || true
-  found=1
+  raw="$(dnf check-update 2>/dev/null || true)"
+elif command -v yum >/dev/null 2>&1; then
+  manager="yum"
+  raw="$(yum check-update 2>/dev/null || true)"
+elif command -v pacman >/dev/null 2>&1; then
+  manager="pacman"
+  raw="$(pacman -Qu 2>/dev/null || true)"
 fi
 
-if [ "$found" -eq 0 ] && command -v yum >/dev/null 2>&1; then
-  echo "--- YUM (yum check-update) ---"
-  yum check-update || true
-  found=1
+# Best-effort package-name extraction (first whitespace/`/`-delimited token per
+# non-empty line). brew lists bare names; apt uses "name/suite"; pacman/dnf put
+# the name first too.
+extract_names() {
+  printf '%s\n' "$raw" | awk 'NF { n=$1; sub(/\/.*/,"",n); print n }'
+}
+
+if [ "$JSON" -eq 1 ]; then
+  jesc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+  raw_json() { printf '%s' "$raw" | sed 's/\\/\\\\/g; s/"/\\"/g' | awk 'BEGIN{ORS=""} {if(NR>1) printf "\\n"; print}'; }
+  mgr_json() { if [ -z "$manager" ]; then printf 'null'; else printf '"%s"' "$manager"; fi; }
+
+  names=""
+  count=0
+  if [ -n "$manager" ]; then
+    while IFS= read -r name; do
+      [ -z "$name" ] && continue
+      if [ -z "$names" ]; then
+        names="\"$(jesc "$name")\""
+      else
+        names="$names, \"$(jesc "$name")\""
+      fi
+      count=$((count + 1))
+    done <<EOF
+$(extract_names)
+EOF
+  fi
+
+  printf '{\n'
+  printf '  "manager": %s,\n' "$(mgr_json)"
+  printf '  "count": %s,\n' "$count"
+  printf '  "packages": [%s],\n' "$names"
+  printf '  "raw": "%s"\n' "$(raw_json)"
+  printf '}\n'
+  exit 0
 fi
 
-if [ "$found" -eq 0 ] && command -v pacman >/dev/null 2>&1; then
-  echo "--- pacman (pacman -Qu) ---"
-  pacman -Qu || true
-  found=1
-fi
-
-if [ "$found" -eq 0 ]; then
-  echo "No supported package manager found (looked for brew, apt, dnf, yum, pacman)."
-fi
-
+echo "=== OUTDATED PACKAGES ==="
+case "$manager" in
+  brew)   echo "--- Homebrew (brew outdated) ---" ;;
+  apt)    echo "--- APT (apt list --upgradable) ---" ;;
+  dnf)    echo "--- DNF (dnf check-update) ---" ;;
+  yum)    echo "--- YUM (yum check-update) ---" ;;
+  pacman) echo "--- pacman (pacman -Qu) ---" ;;
+  *)      echo "No supported package manager found (looked for brew, apt, dnf, yum, pacman)."; exit 0 ;;
+esac
+printf '%s\n' "$raw"
 exit 0
 POD
 # request_cowork.sh — REVERSE direction: hand a request from this machine to a

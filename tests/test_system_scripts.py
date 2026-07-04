@@ -116,6 +116,15 @@ def test_generated_system_scripts_exit_zero_and_print_expected_sections(
         ("mac_disk.sh", "MD"),
         ("mac_top.sh", "MT"),
         ("mac_network.sh", "MN"),
+        # Diagnostic scripts with a --json mode. The install.sh heredoc is what
+        # actually lands on a user's machine, so it must carry the same --json
+        # implementation the examples/ copy (and docs) advertise. These three
+        # silently drifted: examples/ + docs gained --json while the install.sh
+        # heredoc stayed on the old text-only body, so installed machines never
+        # got structured output. Guarding them here keeps the surfaces in sync.
+        ("docker_ps.sh", "DPS"),
+        ("pkg_outdated.sh", "POD"),
+        ("port_check.sh", "PC"),
     ],
 )
 def test_example_system_scripts_match_install_templates(script_name: str, marker: str) -> None:
