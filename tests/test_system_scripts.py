@@ -391,6 +391,58 @@ def test_process_kill_example_matches_install_template() -> None:
     assert example.read_text() == _extract_script("process_kill.sh", "PK")
 
 
+# ── install.sh ships the full allowed-scripts set ────────────────────────────
+# Every diagnostic/utility script in examples/allowed_scripts/ must also be
+# written by install.sh, so a fresh `curl | bash` install has the same toolbox
+# as the checked-in examples. The per-script byte-parity guards above only fire
+# for scripts someone remembered to reference by name — a script silently left
+# out of install.sh entirely slips through them all (this is exactly how --json
+# drifted out of install.sh once). This set-level check catches that.
+#
+# INSTALL_SH_EXEMPT lists scripts that are intentionally NOT shipped by
+# install.sh. Adding an entry is a deliberate policy decision — document why.
+INSTALL_SH_EXEMPT = {
+    # approve_plan.sh is an opt-in plan-approval gate. The bridge daemon runs it
+    # only if it exists; its own header states that its ABSENCE is the safe
+    # default ("all tasks proceed normally"). Shipping it by default would
+    # silently opt every installer into plan logging + a gate hook, so install.sh
+    # deliberately omits it and users copy it in when they want a policy gate.
+    "approve_plan.sh",
+}
+
+
+def test_install_sh_ships_every_allowed_script() -> None:
+    """Each examples/allowed_scripts/*.sh is shipped by install.sh (or exempt)."""
+    examples = REPO_ROOT / "examples" / "allowed_scripts"
+    install_text = INSTALL_SH.read_text()
+
+    missing = []
+    for script in sorted(examples.glob("*.sh")):
+        name = script.name
+        if name in INSTALL_SH_EXEMPT:
+            continue
+        # install.sh writes each script via `cat > "$BRIDGE_ROOT/scripts/<name>"`.
+        if f'cat > "$BRIDGE_ROOT/scripts/{name}"' not in install_text:
+            missing.append(name)
+
+    assert not missing, (
+        "these allowed scripts are not written by install.sh — a fresh install "
+        f"would be missing them: {missing}. Add a heredoc to install.sh, or if "
+        "the omission is intentional, add the script to INSTALL_SH_EXEMPT with a "
+        "reason."
+    )
+
+
+def test_install_sh_exemptions_still_exist() -> None:
+    """Guard against a stale exemption: every exempt script must still exist."""
+    examples = REPO_ROOT / "examples" / "allowed_scripts"
+    stale = [n for n in INSTALL_SH_EXEMPT if not (examples / n).is_file()]
+    assert not stale, (
+        f"INSTALL_SH_EXEMPT lists scripts that no longer exist: {stale}. "
+        "Remove them from the exemption set."
+    )
+
+
 # ── run_claude.sh model-router wiring ─────────────────────────────────────────
 # The installed run_claude.sh (the install.sh heredoc) is what runs on a real
 # machine. Its header comments are deliberately condensed vs the canonical
