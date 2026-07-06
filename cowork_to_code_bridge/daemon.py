@@ -585,6 +585,25 @@ def run_one(cmd_path: Path, token_required: str | None,
             else:
                 log(f"  ! ignoring invalid model_tier={tier_raw!r}")
 
+    # ── Effort injection (issue #33) ──────────────────────────────────────────
+    # Inject CLAUDE_EFFORT from the command payload so run_claude.sh can pass the
+    # claude CLI's `--effort <low|medium|high|xhigh|max>` flag. Parallel to model
+    # tier: the effort is validated against the CLI's fixed set; an unknown value
+    # is ignored (logged) so a bad payload falls back to the CLI default rather
+    # than dispatching a garbage flag. An owner-set CLAUDE_EFFORT in the daemon
+    # env always wins (same precedence as model tier and CLAUDE_FLAGS) — the
+    # caller can't override it.
+    effort_raw = cmd.get("effort")
+    if effort_raw is not None:
+        if "CLAUDE_EFFORT" in env:
+            log("  ! ignoring caller effort: owner CLAUDE_EFFORT is set")
+        else:
+            effort_norm = str(effort_raw).strip().lower()
+            if effort_norm in {"low", "medium", "high", "xhigh", "max"}:
+                env["CLAUDE_EFFORT"] = effort_norm
+            else:
+                log(f"  ! ignoring invalid effort={effort_raw!r}")
+
     # ── Per-task permission scope injection (issue #47) ───────────────────────
     # Inject CLAUDE_FLAGS from a caller-supplied permission_scope so a single task
     # can be sandboxed (plan/readonly/edit) without the owner having to set a

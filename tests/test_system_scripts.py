@@ -538,6 +538,39 @@ def test_run_claude_copies_pair_each_tier_to_correct_model(path: Path, is_heredo
         )
 
 
+# The effort → --effort routing (issue #33) is duplicated in the same three
+# copies as the model tier map. Guard that it is present AND wired into the exec
+# line in every copy, so it can't regress the way the model router silently did.
+
+_VALID_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+
+def test_install_run_claude_has_effort_router() -> None:
+    body = _extract_script("run_claude.sh", "RUNCLAUDE")
+    assert "CLAUDE_EFFORT" in body
+    # every valid effort level accepted by the case arm
+    for level in _VALID_EFFORTS:
+        assert level in body, f"effort level '{level}' missing from install.sh run_claude.sh"
+    # and actually passed to the CLI in the exec line
+    exec_line = next(line for line in body.splitlines() if line.startswith("exec "))
+    assert '"${EFFORT_FLAGS[@]}"' in exec_line, (
+        f"run_claude.sh exec must pass EFFORT_FLAGS, got: {exec_line}"
+    )
+
+
+@pytest.mark.parametrize(("path", "is_heredoc"), _RUN_CLAUDE_COPIES)
+def test_run_claude_copies_wire_effort_into_exec(path: Path, is_heredoc: bool) -> None:
+    """Every run_claude.sh copy must accept CLAUDE_EFFORT and pass EFFORT_FLAGS."""
+    body = _extract_script("run_claude.sh", "RUNCLAUDE") if is_heredoc else path.read_text()
+    assert "CLAUDE_EFFORT" in body, f"{path.name}: CLAUDE_EFFORT handling missing"
+    for level in _VALID_EFFORTS:
+        assert f"{level}" in body, f"{path.name}: effort level '{level}' missing"
+    exec_line = next(line for line in body.splitlines() if line.startswith("exec "))
+    assert '"${EFFORT_FLAGS[@]}"' in exec_line, (
+        f"{path.name}: exec must pass EFFORT_FLAGS, got: {exec_line}"
+    )
+
+
 # ── newer utility scripts (list_scripts, env_check, disk_hogs, open_browser) ──
 
 NEW_SCRIPTS = [

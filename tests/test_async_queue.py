@@ -49,6 +49,33 @@ def test_queue_task_returns_task_id(bridge_root):
     assert task_file.exists()
 
 
+def test_queue_task_effort_in_payload(bridge_root):
+    """queue_task(effort=...) writes a normalized effort into the task payload (issue #33)."""
+    result = queue_task(
+        "scripts/run_claude.sh",
+        args=["do a thing"],
+        timeout=60,
+        bridge_root=bridge_root,
+        effort="  HIGH  ",
+    )
+    task_file = bridge_root / "queue" / f"{result['task_id']}.json"
+    payload = json.loads(task_file.read_text())
+    assert payload["effort"] == "high"  # trimmed + lowercased
+
+
+def test_queue_task_no_effort_key_when_unset(bridge_root):
+    """Omitting effort must not add an 'effort' key (daemon then uses CLI default)."""
+    result = queue_task(
+        "scripts/run_claude.sh",
+        args=[],
+        timeout=60,
+        bridge_root=bridge_root,
+    )
+    task_file = bridge_root / "queue" / f"{result['task_id']}.json"
+    payload = json.loads(task_file.read_text())
+    assert "effort" not in payload
+
+
 def test_queue_task_atomic_write(bridge_root):
     """Task file is written atomically (.tmp then rename)."""
     result = queue_task(

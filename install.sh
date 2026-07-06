@@ -517,7 +517,25 @@ if [[ -n "${CLAUDE_MODEL_TIER:-}" ]]; then
   fi
 fi
 
-exec "$CLAUDE_BIN" "${EXTRA_FLAGS[@]}" "${MODEL_FLAGS[@]}" "${BUDGET_FLAGS[@]}" -p "$TASK" --output-format text
+# ── Effort → --effort ───────────────────────────────────────────────────────
+# CLAUDE_EFFORT: reasoning-effort tier injected by the daemon (issue #33). The
+# claude CLI accepts --effort <low|medium|high|xhigh|max>; a lower effort is
+# cheaper/faster for trivial tasks, higher for hard multi-file work. An unset or
+# unknown value means: don't pass --effort, let the CLI pick its default. Kept in
+# sync with the daemon's CLAUDE_EFFORT validation set.
+EFFORT_FLAGS=()
+if [[ -n "${CLAUDE_EFFORT:-}" ]]; then
+  EFFORT_LEVEL="$(echo "$CLAUDE_EFFORT" | tr '[:upper:]' '[:lower:]')"
+  case "$EFFORT_LEVEL" in
+    low|medium|high|xhigh|max)
+      log "effort '$CLAUDE_EFFORT' → --effort $EFFORT_LEVEL"
+      EFFORT_FLAGS=(--effort "$EFFORT_LEVEL") ;;
+    *)
+      log "unknown CLAUDE_EFFORT='$CLAUDE_EFFORT' — using CLI default effort" ;;
+  esac
+fi
+
+exec "$CLAUDE_BIN" "${EXTRA_FLAGS[@]}" "${MODEL_FLAGS[@]}" "${EFFORT_FLAGS[@]}" "${BUDGET_FLAGS[@]}" -p "$TASK" --output-format text
 RUNCLAUDE
 chmod +x "$BRIDGE_ROOT/scripts/run_claude.sh"
 
