@@ -443,6 +443,31 @@ def test_install_sh_exemptions_still_exist() -> None:
     )
 
 
+def test_every_installed_script_has_an_examples_copy() -> None:
+    """Reverse of test_install_sh_ships_every_allowed_script.
+
+    Every script install.sh writes to $BRIDGE_ROOT/scripts/ must also live in
+    examples/allowed_scripts/ as the checked-in reference. The forward set-level
+    guard only walks examples/ → install.sh, so a script shipped by install.sh
+    (and by bridge/scripts/) but never added to examples/ slips through every
+    check — exactly how ping.sh drifted: daemon_alive() calls it, install.sh and
+    bridge/scripts/ carry it, but examples/allowed_scripts/ had no copy, so its
+    byte content was unguarded against the two shipping copies.
+    """
+    import re
+
+    examples = REPO_ROOT / "examples" / "allowed_scripts"
+    install_text = INSTALL_SH.read_text()
+    shipped = set(re.findall(r'cat > "\$BRIDGE_ROOT/scripts/([a-z_]+\.sh)"', install_text))
+
+    missing = sorted(name for name in shipped if not (examples / name).is_file())
+    assert not missing, (
+        "install.sh ships these scripts but examples/allowed_scripts/ has no "
+        f"copy, so their content is unguarded against drift: {missing}. Add the "
+        "checked-in reference copy (byte-identical to the install.sh heredoc)."
+    )
+
+
 # ── run_claude.sh model-router wiring ─────────────────────────────────────────
 # The installed run_claude.sh (the install.sh heredoc) is what runs on a real
 # machine. Its header comments are deliberately condensed vs the canonical
@@ -520,6 +545,7 @@ NEW_SCRIPTS = [
     ("env_check.sh", "EC"),
     ("disk_hogs.sh", "DH"),
     ("open_browser.sh", "OB"),
+    ("ping.sh", "PING"),
 ]
 
 
