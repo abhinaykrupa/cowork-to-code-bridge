@@ -327,6 +327,124 @@ def get_routing_metadata(
         return None
 
 
+# ─────────────────────────────────────────────────────────────────────────── #
+# Auto-select heuristic (issue #33)
+#
+# When a caller does not (or cannot) declare a model tier / effort, the router
+# offers a transparent, deterministic keyword heuristic that maps the task
+# description to a recommended (tier, effort). It is intentionally rule-based —
+# not ML — so the decision is auditable, offline, and free: every recommendation
+# reports exactly which signals fired. The mandatory `model_preference` on
+# `route_task()` is unchanged; this only fills the gap when nothing was declared.
+#
+# The tiers mirror the project's model-tiered delegation policy (CLAUDE.md):
+#   haiku  → triage, summaries, classification, boilerplate, lookups
+#   sonnet → coding, tests, refactors, debugging, standard work (DEFAULT)
+#   opus   → multi-file design, architecture, tricky cross-module debugging
+#   fable  → deepest reasoning; only when a task explicitly asks for it
+# ─────────────────────────────────────────────────────────────────────────── #
+
+# Signal keywords per tier, checked as whole-word matches (case-insensitive).
+# Order matters only for reporting; scoring picks the highest-tier match so a
+# task that is both "summarize" (haiku) and "architect" (opus) routes to opus.
+_TIER_SIGNALS: dict[ModelTier, tuple[str, ...]] = {
+    ModelTier.HAIKU: (
+        "summarize", "summary", "classify", "classification", "triage",
+        "lookup", "look up", "format", "reformat", "rename", "list",
+        "extract", "boilerplate", "typo", "lint", "grep", "count",
+    ),
+    ModelTier.SONNET: (
+        "code", "implement", "write", "test", "tests", "refactor", "debug",
+        "fix", "bug", "add", "update", "build", "script", "function",
+        "endpoint", "parse", "convert", "migrate",
+    ),
+    ModelTier.OPUS: (
+        "architect", "architecture", "design",
+        "redesign", "multi-file", "cross-module", "cross module", "system",
+        "plan the", "tricky", "complex", "concurrency", "race condition",
+        "distributed", "rearchitect", "trade-off", "tradeoff",
+    ),
+    ModelTier.FABLE: (
+        "prove", "proof", "theorem", "novel algorithm", "research-grade",
+        "deep reasoning", "hardest", "reason deeply",
+    ),
+}
+
+# Effort follows tier by default; these phrases bump effort up or down
+# independently, so a caller can say "quick" or "thorough" and be heard.
+_EFFORT_FOR_TIER: dict[ModelTier, str] = {
+    ModelTier.HAIKU: "low",
+    ModelTier.SONNET: "medium",
+    ModelTier.OPUS: "high",
+    ModelTier.FABLE: "max",
+}
+_EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max"]
+_EFFORT_UP_SIGNALS = ("thorough", "carefully", "exhaustive", "rigorous", "in depth", "in-depth")
+_EFFORT_DOWN_SIGNALS = ("quick", "quickly", "simple", "trivial", "just ", "one-liner", "one liner")
+
+
+def _match_signals(text: str, signals: tuple[str, ...]) -> list[str]:
+    """Return the signal phrases that appear in `text` (case-insensitive)."""
+    return [s for s in signals if s in text]
+
+
+def auto_select(task_description: str | None) -> dict[str, Any]:
+    """Recommend a (tier, effort) for a task from its description (issue #33).
+
+    Deterministic and offline: scans `task_description` for tier signal words,
+    picks the highest tier whose signals fire, then derives an effort level
+    (adjustable by "quick"/"thorough"-style phrases). Ambiguous or empty input
+    falls back to the safe default (sonnet / medium).
+
+    Returns a dict with keys:
+      - tier: recommended ModelTier value ("haiku"|"sonnet"|"opus"|"fable")
+      - effort: recommended effort ("low"|"medium"|"high"|"xhigh"|"max")
+      - matched_signals: {tier_value: [phrases that fired]} for audit
+      - reasoning: one-line human explanation
+      - is_default: True when no signal fired and the fallback was used
+    """
+    text = (task_description or "").lower()
+
+    matched: dict[str, list[str]] = {}
+    for tier in TIER_HIERARCHY:
+        hits = _match_signals(text, _TIER_SIGNALS[tier])
+        if hits:
+            matched[tier.value] = hits
+
+    # Pick the highest tier (by hierarchy) that matched any signal.
+    selected_tier: ModelTier | None = None
+    for tier in reversed(TIER_HIERARCHY):  # fable → haiku
+        if tier.value in matched:
+            selected_tier = tier
+            break
+
+    is_default = selected_tier is None
+    if is_default:
+        selected_tier = ModelTier.SONNET
+
+    effort = _EFFORT_FOR_TIER[selected_tier]
+    effort_idx = _EFFORT_ORDER.index(effort)
+    if any(s in text for s in _EFFORT_UP_SIGNALS):
+        effort_idx = min(effort_idx + 1, len(_EFFORT_ORDER) - 1)
+    elif any(s in text for s in _EFFORT_DOWN_SIGNALS):
+        effort_idx = max(effort_idx - 1, 0)
+    effort = _EFFORT_ORDER[effort_idx]
+
+    if is_default:
+        reasoning = "No tier signal detected — defaulting to sonnet/medium."
+    else:
+        fired = ", ".join(matched[selected_tier.value])
+        reasoning = f"Matched {selected_tier.value} signal(s): {fired}."
+
+    return {
+        "tier": selected_tier.value,
+        "effort": effort,
+        "matched_signals": matched,
+        "reasoning": reasoning,
+        "is_default": is_default,
+    }
+
+
 def get_routing_recommendations(
     task_description: str,
     fallback_on_error: bool = True,
@@ -334,30 +452,48 @@ def get_routing_recommendations(
     """Get recommended model tier for a task (informational only).
 
     This is for reference/logging. Actual decisions are made by the requester
-    via the mandatory model_preference parameter.
+    via the mandatory model_preference parameter — the recommendation here is
+    a hint, not a binding selection. Backed by the deterministic keyword
+    heuristic in `auto_select()` (issue #33).
 
     Args:
         task_description: Brief description of the task
-        fallback_on_error: If True, return sensible default on any error
+        fallback_on_error: If True, return the safe default on any error rather
+            than propagating (keeps this call non-throwing for logging paths)
 
     Returns:
         dict with keys:
-          - recommended_tier: Suggested ModelTier
-          - reasoning: Brief explanation
-          - can_use_cheaper: Whether the task could use a cheaper model
-          - must_use_expensive: Whether the task requires a higher tier
+          - recommended_tier: Suggested tier value ("haiku"|"sonnet"|"opus"|"fable")
+          - recommended_effort: Suggested effort ("low"|"medium"|"high"|"xhigh"|"max")
+          - reasoning: Brief explanation of the recommendation
+          - can_use_cheaper: Whether a cheaper tier than sonnet suffices
+          - must_use_expensive: Whether a tier above sonnet is warranted
+          - matched_signals: Which keyword signals fired, per tier (audit)
+          - note: Reminder that final selection is the requester's
     """
-    # For now, this is a placeholder that always recommends Sonnet
-    # In production, this could integrate with:
-    # - Task history (what worked before?)
-    # - Cost tracking (budget constraints?)
-    # - ML-based complexity estimation
-    # - User patterns (this user always overspecifies?)
+    try:
+        sel = auto_select(task_description)
+    except Exception:
+        if not fallback_on_error:
+            raise
+        sel = {
+            "tier": "sonnet",
+            "effort": "medium",
+            "matched_signals": {},
+            "reasoning": "Recommendation failed — using safe default.",
+            "is_default": True,
+        }
+
+    tier = sel["tier"]
+    tier_rank = TIER_HIERARCHY.index(ModelTier(tier))
+    sonnet_rank = TIER_HIERARCHY.index(ModelTier.SONNET)
 
     return {
-        "recommended_tier": "sonnet",
-        "reasoning": "Default recommendation. Actual selection via mandatory model_preference.",
-        "can_use_cheaper": True,
-        "must_use_expensive": False,
+        "recommended_tier": tier,
+        "recommended_effort": sel["effort"],
+        "reasoning": sel["reasoning"],
+        "can_use_cheaper": tier_rank < sonnet_rank,
+        "must_use_expensive": tier_rank > sonnet_rank,
+        "matched_signals": sel["matched_signals"],
         "note": "Model selection is determined by requester via model_preference parameter.",
     }

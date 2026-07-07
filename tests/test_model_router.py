@@ -18,6 +18,7 @@ from cowork_to_code_bridge.model_router import (
     PermissionScope,
     _get_cascade_order,
     _validate_model_preference,
+    auto_select,
     get_routing_metadata,
     get_routing_recommendations,
     route_task,
@@ -426,6 +427,100 @@ def test_get_routing_recommendations_no_error():
             assert isinstance(recs, dict)
         except Exception as e:
             pytest.fail(f"get_routing_recommendations raised {type(e).__name__}: {e}")
+
+
+# ─────────────────────────────────────────────────────────────────────────── #
+# Auto-select heuristic (issue #33)
+# ─────────────────────────────────────────────────────────────────────────── #
+
+
+def test_auto_select_empty_defaults_to_sonnet():
+    """No description → safe default of sonnet/medium, flagged as default."""
+    for empty in ["", None, "   "]:
+        sel = auto_select(empty)
+        assert sel["tier"] == "sonnet"
+        assert sel["effort"] == "medium"
+        assert sel["is_default"] is True
+
+
+def test_auto_select_haiku_signals():
+    """Lightweight verbs route to haiku/low."""
+    sel = auto_select("Summarize this changelog and classify each entry")
+    assert sel["tier"] == "haiku"
+    assert sel["effort"] == "low"
+    assert sel["is_default"] is False
+    assert "summarize" in sel["matched_signals"]["haiku"]
+
+
+def test_auto_select_sonnet_signals():
+    """Standard coding work routes to sonnet/medium."""
+    sel = auto_select("Implement a parser and write tests for the endpoint")
+    assert sel["tier"] == "sonnet"
+    assert sel["effort"] == "medium"
+
+
+def test_auto_select_opus_signals():
+    """Architecture/design work routes to opus/high."""
+    sel = auto_select("Design the cross-module architecture for the new system")
+    assert sel["tier"] == "opus"
+    assert sel["effort"] == "high"
+
+
+def test_auto_select_fable_signals():
+    """Deepest-reasoning cues route to fable/max."""
+    sel = auto_select("Prove the theorem and design a novel algorithm")
+    assert sel["tier"] == "fable"
+    assert sel["effort"] == "max"
+
+
+def test_auto_select_highest_tier_wins():
+    """A task with both haiku and opus signals routes to the higher tier."""
+    sel = auto_select("Summarize the design and architect the refactor")
+    assert sel["tier"] == "opus"
+
+
+def test_auto_select_effort_bumped_up():
+    """A 'thorough' cue raises effort one step above the tier default."""
+    sel = auto_select("Implement the feature thoroughly")  # sonnet → medium → high
+    assert sel["tier"] == "sonnet"
+    assert sel["effort"] == "high"
+
+
+def test_auto_select_effort_bumped_down():
+    """A 'quick' cue lowers effort one step below the tier default."""
+    sel = auto_select("Just implement a quick fix")  # sonnet → medium → low
+    assert sel["tier"] == "sonnet"
+    assert sel["effort"] == "low"
+
+
+def test_auto_select_effort_bump_clamps():
+    """Effort bumps never fall off either end of the scale."""
+    top = auto_select("Prove the theorem exhaustively")  # fable → max, up → clamps at max
+    assert top["effort"] == "max"
+    low = auto_select("Just summarize quickly")  # haiku → low, down → clamps at low
+    assert low["effort"] == "low"
+
+
+def test_get_routing_recommendations_uses_heuristic():
+    """The public recommendation surface reflects the heuristic and flags cheaper/pricier."""
+    recs = get_routing_recommendations("Summarize the release notes")
+    assert recs["recommended_tier"] == "haiku"
+    assert recs["recommended_effort"] == "low"
+    assert recs["can_use_cheaper"] is True
+    assert recs["must_use_expensive"] is False
+
+    recs = get_routing_recommendations("Architect the distributed system")
+    assert recs["recommended_tier"] == "opus"
+    assert recs["can_use_cheaper"] is False
+    assert recs["must_use_expensive"] is True
+
+
+def test_get_routing_recommendations_default_still_sonnet():
+    """Backwards-compat: a description with no signal still recommends sonnet."""
+    recs = get_routing_recommendations("Analyze quarterly data")
+    assert recs["recommended_tier"] == "sonnet"
+    assert recs["can_use_cheaper"] is False
+    assert recs["must_use_expensive"] is False
 
 
 # ─────────────────────────────────────────────────────────────────────────── #
