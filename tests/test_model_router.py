@@ -501,6 +501,63 @@ def test_auto_select_effort_bump_clamps():
     assert low["effort"] == "low"
 
 
+# ── Whole-word matching: signals must not fire as substrings of larger words ──
+
+@pytest.mark.parametrize("text, buried_signal", [
+    ("Update the address book UI", "add"),        # 'add' inside 'address'
+    ("Listen for incoming webhooks", "list"),     # 'list' inside 'listen'
+    ("Encode the payload as base64", "code"),      # 'code' inside 'encode'
+    ("Summarize the latest logs", "test"),         # 'test' inside 'latest'
+])
+def test_auto_select_no_substring_false_positive(text, buried_signal):
+    """A signal buried inside a larger word must NOT fire (whole-word matching)."""
+    sel = auto_select(text)
+    all_fired = [s for hits in sel["matched_signals"].values() for s in hits]
+    assert buried_signal not in all_fired, (
+        f"{buried_signal!r} wrongly fired on {text!r} (matched: {all_fired})"
+    )
+
+
+def test_auto_select_latest_logs_route_haiku():
+    """'Summarize the latest logs' routes to haiku — 'latest' no longer bumps to sonnet."""
+    sel = auto_select("Summarize the latest logs")
+    assert sel["tier"] == "haiku"
+
+
+def test_auto_select_adjust_does_not_trigger_just():
+    """The 'just' down-signal must not fire inside 'adjust'."""
+    sel = auto_select("Adjust the retry backoff and add a guard")
+    assert sel["effort"] == "medium"  # sonnet default, no down-bump from 'adjust'
+
+
+@pytest.mark.parametrize("text", [
+    "Design it in-depth",             # hyphenated 'in depth'
+    "Design it in depth",             # spaced
+])
+def test_auto_select_hyphen_and_space_phrases_equivalent(text):
+    """Multi-word signals match both their hyphenated and spaced spellings."""
+    sel = auto_select(text)
+    assert sel["tier"] == "opus"
+    assert sel["effort"] == "xhigh"  # opus high, bumped up by 'in depth'
+
+
+@pytest.mark.parametrize("text", [
+    "Refactor the cross-module imports",
+    "Refactor the cross module imports",
+])
+def test_auto_select_cross_module_both_spellings(text):
+    """'cross-module' and 'cross module' both route to opus."""
+    sel = auto_select(text)
+    assert sel["tier"] == "opus"
+
+
+@pytest.mark.parametrize("text", ["Make it a one-liner", "Make it a one liner"])
+def test_auto_select_one_liner_both_spellings_bump_down(text):
+    """'one-liner'/'one liner' both drop effort a step."""
+    sel = auto_select(f"Write code — {text}")  # sonnet/medium → down → low
+    assert sel["effort"] == "low"
+
+
 def test_get_routing_recommendations_uses_heuristic():
     """The public recommendation surface reflects the heuristic and flags cheaper/pricier."""
     recs = get_routing_recommendations("Summarize the release notes")

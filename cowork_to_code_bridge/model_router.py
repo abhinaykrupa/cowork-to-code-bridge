@@ -15,6 +15,7 @@ with intelligent fallback cascading both up and down the model tier.
 from __future__ import annotations
 
 import json
+import re
 import time
 from enum import Enum
 from pathlib import Path
@@ -379,13 +380,54 @@ _EFFORT_FOR_TIER: dict[ModelTier, str] = {
     ModelTier.FABLE: "max",
 }
 _EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max"]
-_EFFORT_UP_SIGNALS = ("thorough", "carefully", "exhaustive", "rigorous", "in depth", "in-depth")
-_EFFORT_DOWN_SIGNALS = ("quick", "quickly", "simple", "trivial", "just ", "one-liner", "one liner")
+# Effort adjusters, matched with the same whole-word helper as tier signals, so
+# "just" fires as its own word (not inside "adjust") without the old trailing-
+# space hack, and "one-liner"/"one liner" collapse to one phrase (\b…\b treats
+# the hyphen as a boundary, so "one liner" matches both spellings).
+# Both adjective and adverb forms are listed explicitly ("thorough"/"thoroughly")
+# because matching is now whole-word: substrings no longer bleed one into the
+# other, so each spelling a caller might type must appear here to be heard.
+_EFFORT_UP_SIGNALS = (
+    "thorough", "thoroughly", "careful", "carefully", "exhaustive",
+    "exhaustively", "rigorous", "rigorously", "in depth",
+)
+_EFFORT_DOWN_SIGNALS = (
+    "quick", "quickly", "simple", "simply", "trivial", "trivially",
+    "just", "one liner",
+)
+
+
+# Cache of compiled whole-word matchers, one per signal phrase. A phrase matches
+# only at word boundaries so "add" fires on "add a route" but NOT on "address",
+# "list" not on "listen", "code" not on "encode", "test" not on "latest". Multi-
+# word phrases ("look up", "race condition", "cross module") match a run of
+# whitespace between their words, so extra spacing still fires. Built lazily and
+# memoized because the signal set is small and fixed for the process lifetime.
+_SIGNAL_PATTERNS: dict[str, re.Pattern[str]] = {}
+
+
+def _pattern_for(signal: str) -> re.Pattern[str]:
+    pat = _SIGNAL_PATTERNS.get(signal)
+    if pat is None:
+        # Escape each word, join multi-word phrases on [\s-]+ so a spaced phrase
+        # ("one liner", "cross module", "in depth") also matches its hyphenated
+        # spelling ("one-liner", "cross-module", "in-depth"), and wrap in \b…\b so
+        # the whole match is anchored to word boundaries, never a mid-word
+        # substring. A phrase written with a hyphen in the signal list splits on
+        # that hyphen too, so both list spellings collapse to one pattern.
+        body = r"[\s-]+".join(re.escape(w) for w in re.split(r"[\s-]+", signal))
+        pat = re.compile(rf"\b{body}\b", re.IGNORECASE)
+        _SIGNAL_PATTERNS[signal] = pat
+    return pat
 
 
 def _match_signals(text: str, signals: tuple[str, ...]) -> list[str]:
-    """Return the signal phrases that appear in `text` (case-insensitive)."""
-    return [s for s in signals if s in text]
+    """Return the signal phrases that appear in `text` as whole words.
+
+    Case-insensitive and word-boundary anchored, so a signal only fires when it
+    stands as its own word(s) — never as a substring of a larger word.
+    """
+    return [s for s in signals if _pattern_for(s).search(text)]
 
 
 def auto_select(task_description: str | None) -> dict[str, Any]:
@@ -424,9 +466,9 @@ def auto_select(task_description: str | None) -> dict[str, Any]:
 
     effort = _EFFORT_FOR_TIER[selected_tier]
     effort_idx = _EFFORT_ORDER.index(effort)
-    if any(s in text for s in _EFFORT_UP_SIGNALS):
+    if _match_signals(text, _EFFORT_UP_SIGNALS):
         effort_idx = min(effort_idx + 1, len(_EFFORT_ORDER) - 1)
-    elif any(s in text for s in _EFFORT_DOWN_SIGNALS):
+    elif _match_signals(text, _EFFORT_DOWN_SIGNALS):
         effort_idx = max(effort_idx - 1, 0)
     effort = _EFFORT_ORDER[effort_idx]
 
