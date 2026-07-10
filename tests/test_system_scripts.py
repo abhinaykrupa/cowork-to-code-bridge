@@ -636,7 +636,6 @@ def test_mac_ram_json_values_are_numeric(mac_ram_script: Path) -> None:
 # the example copy matches; these tests only exercise the new --json branch.
 # ─────────────────────────────────────────────────────────────────────────────
 
-import json  # noqa: E402
 
 
 def _extract_to(tmp_path: Path, script_name: str, marker: str) -> Path:

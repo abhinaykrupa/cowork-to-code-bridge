@@ -17,7 +17,6 @@ import subprocess
 import textwrap
 from pathlib import Path
 
-
 REPO = Path(__file__).parent.parent
 EXAMPLES = REPO / "examples" / "allowed_scripts"
 INSTALL_SH = REPO / "install.sh"

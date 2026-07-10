@@ -29,15 +29,17 @@ Hermes config (examples/hermes-mcp-config.json):
 from __future__ import annotations
 
 import json
-import os
 import sys
 import traceback
-from pathlib import Path
 from typing import Any
 
 from cowork_to_code_bridge.client import (
     call_mcp_tool as _call_mcp_tool,
+)
+from cowork_to_code_bridge.client import (
     call_remote as _call_remote,
+)
+from cowork_to_code_bridge.client import (
     daemon_alive as _daemon_alive,
 )
 

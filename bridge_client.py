@@ -458,11 +458,6 @@ def call_mcp_tool(
         })
         row = json.loads(r["stdout"])["result"]["content"][0]["text"]
     """
-<<<<<<< Updated upstream
-    args = ["--server", server, "--method", method]
-    if params is not None:
-        args += ["--params", json.dumps(params)]
-=======
     args = ["--server", server, "--method", method]
     if params is not None:
         args += ["--params", json.dumps(params)]
