@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import platform
 import subprocess
@@ -381,6 +382,80 @@ def test_process_kill_single_match_succeeds(
     )
     assert result.returncode == 0
     assert "✓" in result.stdout or "terminated" in result.stdout.lower()
+
+
+# ── JSON output mode (--json) ─────────────────────────────────────────────────
+
+def test_process_kill_json_success_single_match(
+    process_kill_script: Path, tmp_path: Path
+) -> None:
+    """--json emits ok=true with the killed PID in the `killed` array."""
+    stateful_pgrep = tmp_path / "fake_pgrep_json"
+    stateful_pgrep.write_text(
+        '#!/usr/bin/env bash\n'
+        'STATE="$(dirname "$0")/.called"\n'
+        'if [[ ! -f "$STATE" ]]; then touch "$STATE"; printf "9999\\n"; exit 0; fi\n'
+        'exit 1\n'
+    )
+    stateful_pgrep.chmod(0o755)
+    fake_kill = _fake_kill(tmp_path, "success")
+    result = _run_pk(
+        process_kill_script, ["myapp", "--json"],
+        {"BRIDGE_PGREP_CMD": str(stateful_pgrep), "BRIDGE_KILL_CMD": str(fake_kill)},
+    )
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["mode"] == "name"
+    assert payload["target"] == "myapp"
+    assert 9999 in payload["killed"]
+    assert payload["remaining"] == []
+    assert payload["error"] is None
+
+
+def test_process_kill_json_protected_name_error(
+    process_kill_script: Path, tmp_path: Path
+) -> None:
+    """--json emits ok=false with a structured error for protected names."""
+    result = _run_pk(process_kill_script, ["launchd", "--json"])
+    assert result.returncode != 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["error"] is not None
+    assert "protected" in payload["error"].lower()
+
+
+def test_process_kill_json_multiple_no_all_flag(
+    process_kill_script: Path, tmp_path: Path
+) -> None:
+    """--json surfaces the ambiguous-match refusal with remaining PIDs listed."""
+    fake_pgrep = _fake_pgrep(tmp_path, [1234, 5678])
+    fake_kill = _fake_kill(tmp_path, "success")
+    result = _run_pk(
+        process_kill_script, ["myapp", "--json"],
+        {"BRIDGE_PGREP_CMD": str(fake_pgrep), "BRIDGE_KILL_CMD": str(fake_kill)},
+    )
+    assert result.returncode != 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert sorted(payload["remaining"]) == [1234, 5678]
+    assert payload["killed"] == []
+    assert "--all" in payload["error"]
+
+
+def test_process_kill_json_nonexistent_pid(
+    process_kill_script: Path, tmp_path: Path
+) -> None:
+    """--json PID path emits mode=pid with a not-found error."""
+    fake_kill = _fake_kill(tmp_path, "no_proc")
+    result = _run_pk(
+        process_kill_script, ["9999", "--json"], {"BRIDGE_KILL_CMD": str(fake_kill)}
+    )
+    assert result.returncode != 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["mode"] == "pid"
+    assert "no process" in payload["error"].lower()
 
 
 # ── Template sync ─────────────────────────────────────────────────────────────
