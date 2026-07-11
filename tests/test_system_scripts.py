@@ -400,6 +400,12 @@ NEW_SCRIPTS = [
     ("disk_hogs.sh", "DH"),
     ("open_browser.sh", "OB"),
     ("ping.sh", "PING"),
+    # run_claude.sh is the heart of the bridge and carries the per-task model
+    # tier (#33), effort (#33) and permission scope (#47) wiring. A prior rebase
+    # left the install.sh heredoc on an older body that lacked the --model/--effort
+    # flags, so installed machines silently lost model routing while examples/ had
+    # it. Guard byte-sync here so that break can't recur unnoticed.
+    ("run_claude.sh", "RUNCLAUDE"),
 ]
 
 

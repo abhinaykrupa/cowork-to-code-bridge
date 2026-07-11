@@ -403,86 +403,141 @@ chmod +x "$BRIDGE_ROOT/scripts/hello.sh"
 # run_claude.sh — THE bridge's purpose: hand a task to Claude Code on the Mac.
 cat > "$BRIDGE_ROOT/scripts/run_claude.sh" <<'RUNCLAUDE'
 #!/usr/bin/env bash
-# run_claude.sh — hand a task to Claude Code (the `claude` CLI) on this Mac.
-# This is what makes the bridge a Cowork -> Claude Code connector.
-# Args: $1 = task/prompt (required), $2 = working dir (optional, default $PWD).
-# Always pass an idempotency_key from Cowork — Claude Code tasks have side effects.
+# run_claude.sh — the heart of the bridge: hand a task to Claude Code on the Mac.
 #
-# CLI resolution: PATH -> common install dirs -> Desktop app bundle ->
-# auto-install (brew, else official installer) -> clear failure. Auto-install
-# is gated by BRIDGE_CLAUDE_AUTOINSTALL (default 1; set 0 to disable).
+# Cowork sends a free-form task; this invokes the local `claude` CLI headless so
+# a real Claude Code agent does the work on your Mac. Result flows back through
+# the bridge.
+#
+# Usage from Cowork:
+#   call_remote("scripts/run_claude.sh",
+#       args=["Build a Flask app with one /health route", "/path/to/project"],
+#       timeout=600, idempotency_key="...")
+#
+# Args:
+#   $1  the task / prompt for Claude Code (required)
+#   $2  working directory to run Claude Code in (optional; default: $PWD)
+#
+# CLI RESOLUTION (handles "Desktop app but no CLI on PATH"):
+#   1. `claude` on PATH
+#   2. Common install locations (Homebrew, official installer, ~/.local/bin)
+#   3. The Claude Desktop app's bundled claude-code binary
+#   4. Auto-install the CLI on the fly (Homebrew cask, else official installer)
+#      — gated by BRIDGE_CLAUDE_AUTOINSTALL (default: on). Set to 0 to disable
+#        and get a clear "install it yourself" message instead.
+#   5. If all fail: exit 127 with the exact command the user should run.
+#
+# Idempotency: Claude Code tasks have side effects (edits, commits, pushes).
+# Always pass an idempotency_key so a retry returns the cached result instead of
+# running the agent twice.
 set -uo pipefail
+
 TASK="${1:?run_claude.sh: a task/prompt is required as the first argument}"
 WORKDIR="${2:-$PWD}"
 AUTOINSTALL="${BRIDGE_CLAUDE_AUTOINSTALL:-1}"
+
 log() { echo "run_claude.sh: $*" >&2; }
 
+# ── 1+2+3: locate an existing claude binary ──────────────────────────────────
 find_claude() {
+  # PATH first
   local p; p="$(command -v claude 2>/dev/null || true)"
   if [[ -n "$p" && -x "$p" ]]; then echo "$p"; return 0; fi
+  # Common standalone install locations
   local cand
-  for cand in /opt/homebrew/bin/claude /usr/local/bin/claude \
-              "$HOME/.local/bin/claude" "$HOME/.claude/bin/claude"; do
+  for cand in \
+    /opt/homebrew/bin/claude \
+    /usr/local/bin/claude \
+    "$HOME/.local/bin/claude" \
+    "$HOME/.claude/bin/claude"; do
     [[ -x "$cand" ]] && { echo "$cand"; return 0; }
   done
+  # Claude Desktop app's bundled claude-code binary (newest version dir wins)
   local appdir="$HOME/Library/Application Support/Claude/claude-code"
   if [[ -d "$appdir" ]]; then
-    local b; b="$(find "$appdir" -maxdepth 4 -type f -name claude -perm -u+x 2>/dev/null | sort -V | tail -1)"
-    [[ -n "$b" && -x "$b" ]] && { echo "$b"; return 0; }
+    local bundled
+    bundled="$(find "$appdir" -maxdepth 4 -type f -name claude -perm -u+x 2>/dev/null | sort -V | tail -1)"
+    [[ -n "$bundled" && -x "$bundled" ]] && { echo "$bundled"; return 0; }
   fi
   return 1
 }
 
+# ── 4: auto-install on the fly ───────────────────────────────────────────────
 install_claude() {
-  log "claude CLI not found — attempting on-the-fly install (BRIDGE_CLAUDE_AUTOINSTALL=0 to disable)."
+  log "claude CLI not found — attempting on-the-fly install (set BRIDGE_CLAUDE_AUTOINSTALL=0 to disable)."
+  # Prefer Homebrew if present (cleanest, matches how it's usually installed).
   if command -v brew >/dev/null 2>&1; then
     log "installing via: brew install claude-code"
-    brew install claude-code >&2 2>&1 && { hash -r 2>/dev/null||true; return 0; }
+    if brew install claude-code >&2 2>&1; then
+      hash -r 2>/dev/null || true
+      return 0
+    fi
     log "brew install failed — trying official installer."
   fi
+  # Fallback: official installer script.
   if command -v curl >/dev/null 2>&1; then
     log "installing via official installer (curl)"
-    curl -fsSL https://claude.ai/install.sh | bash >&2 2>&1 && {
-      hash -r 2>/dev/null||true; export PATH="$HOME/.local/bin:$PATH"; return 0; }
+    if curl -fsSL https://claude.ai/install.sh | bash >&2 2>&1; then
+      hash -r 2>/dev/null || true
+      # Official installer typically drops it in ~/.local/bin
+      export PATH="$HOME/.local/bin:$PATH"
+      return 0
+    fi
   fi
   return 1
 }
 
 CLAUDE_BIN="$(find_claude || true)"
-if [[ -z "${CLAUDE_BIN:-}" && "$AUTOINSTALL" == "1" ]] && install_claude; then
-  CLAUDE_BIN="$(find_claude || true)"
+
+if [[ -z "${CLAUDE_BIN:-}" ]]; then
+  if [[ "$AUTOINSTALL" == "1" ]] && install_claude; then
+    CLAUDE_BIN="$(find_claude || true)"
+  fi
 fi
+
 if [[ -z "${CLAUDE_BIN:-}" ]]; then
   cat >&2 <<MSG
-run_claude.sh: the Claude Code CLI is not installed on this machine, and it
-could not be installed automatically. Install it once, then retry:
-  curl -fsSL https://claude.ai/install.sh | bash   # macOS or Linux
-  # or, with Homebrew: brew install claude-code
-(Having the Claude Desktop app is NOT enough — the CLI is a separate install.)
+run_claude.sh: the Claude Code CLI is not installed on this Mac, and it could
+not be installed automatically.
+
+Install it once with ONE of these, then retry:
+  brew install claude-code
+  # or:
+  curl -fsSL https://claude.ai/install.sh | bash
+
+(Having the Claude Desktop app is NOT enough — it bundles its own copy but does
+not expose a 'claude' command. The CLI is a separate, one-time install.)
 MSG
   exit 127
 fi
+
 log "using claude at: $CLAUDE_BIN"
 cd "$WORKDIR" || { log "cannot cd to $WORKDIR"; exit 1; }
-# CLAUDE_FLAGS (env): restrict Cowork-originated tasks. Examples:
-#   CLAUDE_FLAGS="--permission-mode plan"                   # plan-only
+
+# CLAUDE_FLAGS (env): set the trust/permission scope for Cowork-originated tasks.
+# If you export CLAUDE_FLAGS in the environment (e.g. in the launchd/systemd unit
+# or your shell profile), those flags are passed to Claude Code. Examples:
+#   CLAUDE_FLAGS="--permission-mode plan"                  # plan-only, no edits/exec
 #   CLAUDE_FLAGS="--allowedTools Edit,Write,Read,Glob,Grep" # edits only, no shell
-# Unset = full agent. The prompt + output format are always appended.
+# Unset/empty = the default (full agent). The task prompt + output format are
+# always appended and can't be overridden.
+#
+# Per-task scope (issue #47): a caller may also request a named permission_scope
+# (plan|readonly|edit|full) on the task payload. The daemon resolves it to the
+# matching CLAUDE_FLAGS via its scope→flags map — but ONLY when the owner has not
+# already set CLAUDE_FLAGS in the daemon env (owner always wins). So by the time
+# this script runs, CLAUDE_FLAGS already reflects whichever scope took effect.
 read -r -a EXTRA_FLAGS <<< "${CLAUDE_FLAGS:-}"
 
 # ── Budget cap ────────────────────────────────────────────────────────────────
-# MAX_BUDGET_USD: per-task spend ceiling passed in by the client.
-# BRIDGE_MAX_BUDGET_USD: owner-set global ceiling (env / launchd unit).
-# Rule: the effective ceiling = min(caller_value, owner_ceiling).
-# If the owner sets BRIDGE_MAX_BUDGET_USD=5.00 and Cowork sends 10.00,
-# the task is capped at $5. If Cowork sends 1.00, it's capped at $1.
+# MAX_BUDGET_USD: per-task ceiling set by the caller (injected via daemon env).
+# BRIDGE_MAX_BUDGET_USD: owner-set global ceiling (launchd/systemd env var).
+# Effective ceiling = min(caller, owner). Owner always wins if caller is higher.
 BUDGET_FLAGS=()
 CALLER_BUDGET="${MAX_BUDGET_USD:-}"
 OWNER_CEILING="${BRIDGE_MAX_BUDGET_USD:-}"
 
 if [[ -n "$OWNER_CEILING" && -n "$CALLER_BUDGET" ]]; then
-  # Both set — use the smaller of the two.
-  # Use awk for float comparison (bash can't do it natively).
   EFFECTIVE=$(awk -v a="$CALLER_BUDGET" -v b="$OWNER_CEILING" \
     'BEGIN { print (a < b) ? a : b }')
   BUDGET_FLAGS=(--max-budget-usd "$EFFECTIVE")
@@ -492,7 +547,50 @@ elif [[ -n "$OWNER_CEILING" ]]; then
   BUDGET_FLAGS=(--max-budget-usd "$OWNER_CEILING")
 fi
 
-exec "$CLAUDE_BIN" "${EXTRA_FLAGS[@]}" "${BUDGET_FLAGS[@]}" -p "$TASK" --output-format text
+# ── Model tier → --model ────────────────────────────────────────────────────
+# CLAUDE_MODEL_TIER: routing tier injected by the daemon (haiku|sonnet|opus|fable).
+# Map it to the concrete model ID the claude CLI expects. Keep in sync with
+# cowork_to_code_bridge/model_router.py's TIER_TO_MODEL_ID (the canonical source).
+# An unset/unknown tier means: don't pass --model, let the CLI pick its default.
+MODEL_FLAGS=()
+tier_to_model_id() {
+  case "$1" in
+    haiku)  echo "claude-haiku-4-5-20251001" ;;
+    sonnet) echo "claude-sonnet-4-6" ;;
+    opus)   echo "claude-opus-4-8" ;;
+    fable)  echo "claude-fable-5" ;;
+    *)      echo "" ;;
+  esac
+}
+if [[ -n "${CLAUDE_MODEL_TIER:-}" ]]; then
+  MODEL_ID="$(tier_to_model_id "$(echo "$CLAUDE_MODEL_TIER" | tr '[:upper:]' '[:lower:]')")"
+  if [[ -n "$MODEL_ID" ]]; then
+    log "model tier '$CLAUDE_MODEL_TIER' → --model $MODEL_ID"
+    MODEL_FLAGS=(--model "$MODEL_ID")
+  else
+    log "unknown CLAUDE_MODEL_TIER='$CLAUDE_MODEL_TIER' — using CLI default model"
+  fi
+fi
+
+# ── Effort → --effort ───────────────────────────────────────────────────────
+# CLAUDE_EFFORT: reasoning-effort tier injected by the daemon (issue #33). The
+# claude CLI accepts --effort <low|medium|high|xhigh|max>; a lower effort is
+# cheaper/faster for trivial tasks, higher for hard multi-file work. An unset or
+# unknown value means: don't pass --effort, let the CLI pick its default. Kept in
+# sync with the daemon's CLAUDE_EFFORT validation set.
+EFFORT_FLAGS=()
+if [[ -n "${CLAUDE_EFFORT:-}" ]]; then
+  EFFORT_LEVEL="$(echo "$CLAUDE_EFFORT" | tr '[:upper:]' '[:lower:]')"
+  case "$EFFORT_LEVEL" in
+    low|medium|high|xhigh|max)
+      log "effort '$CLAUDE_EFFORT' → --effort $EFFORT_LEVEL"
+      EFFORT_FLAGS=(--effort "$EFFORT_LEVEL") ;;
+    *)
+      log "unknown CLAUDE_EFFORT='$CLAUDE_EFFORT' — using CLI default effort" ;;
+  esac
+fi
+
+exec "$CLAUDE_BIN" "${EXTRA_FLAGS[@]}" "${MODEL_FLAGS[@]}" "${EFFORT_FLAGS[@]}" "${BUDGET_FLAGS[@]}" -p "$TASK" --output-format text
 RUNCLAUDE
 chmod +x "$BRIDGE_ROOT/scripts/run_claude.sh"
 

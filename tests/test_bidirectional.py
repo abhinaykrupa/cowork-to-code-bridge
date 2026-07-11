@@ -229,6 +229,27 @@ def test_daemon_injects_bridge_cmd_id():
 
 
 # ---------------------------------------------------------------------------
+# 5b. daemon.py injects per-task routing env (model tier #33, effort #33,
+#     permission scope #47) — a PR#70 rebase silently dropped all three, so
+#     queued tasks stopped honouring model_tier/effort/permission_scope. Guard
+#     the packaged daemon carries each injection so that break can't recur.
+# ---------------------------------------------------------------------------
+
+def test_daemon_injects_routing_env():
+    repo = Path(__file__).parent.parent
+    canonical = (repo / "cowork_to_code_bridge" / "daemon.py").read_text()
+    for needle, feature in (
+        ('env["CLAUDE_MODEL_TIER"] = tier_norm', "model tier (#33)"),
+        ('env["CLAUDE_EFFORT"] = effort_norm', "effort (#33)"),
+        ('cmd.get("permission_scope")', "permission scope (#47)"),
+    ):
+        assert needle in canonical, (
+            "cowork_to_code_bridge/daemon.py (the packaged daemon) must inject "
+            f"{feature} into the child process env — missing marker: {needle!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # 6. request_cowork.sh includes parent field
 # ---------------------------------------------------------------------------
 
@@ -237,3 +258,24 @@ def test_request_cowork_parent_field():
     script = (repo / "examples" / "allowed_scripts" / "request_cowork.sh").read_text()
     assert "parent" in script
     assert "BRIDGE_CMD_ID" in script
+
+
+# ---------------------------------------------------------------------------
+# 6b. run_claude.sh consumes the routing env into claude CLI flags. The daemon
+#     only sets CLAUDE_MODEL_TIER/CLAUDE_EFFORT; the shell must turn them into
+#     --model/--effort or the routing is a no-op. Guard both the examples/ copy
+#     and the packaged install.sh heredoc (the byte-sync guard in
+#     test_system_scripts already ties them together, but assert the behaviour
+#     directly so a future edit to the flag-passing surfaces here too).
+# ---------------------------------------------------------------------------
+
+def test_run_claude_passes_model_and_effort_flags():
+    repo = Path(__file__).parent.parent
+    script = (repo / "examples" / "allowed_scripts" / "run_claude.sh").read_text()
+    assert "CLAUDE_MODEL_TIER" in script
+    assert "CLAUDE_EFFORT" in script
+    assert "--model" in script
+    assert "--effort" in script
+    # The flag arrays must actually reach the exec line, not just be built.
+    assert '"${MODEL_FLAGS[@]}"' in script
+    assert '"${EFFORT_FLAGS[@]}"' in script
