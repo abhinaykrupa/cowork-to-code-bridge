@@ -1638,15 +1638,16 @@ python3 - \
 import sys, json, subprocess, time, os
 
 server_name  = sys.argv[1]
-method       = sys.argv[2]
-params_raw   = sys.argv[3]
-request_raw  = sys.argv[4]
+method       = sys.argv[2]   # empty string if --request used
+params_raw   = sys.argv[3]   # "null" if not provided
+request_raw  = sys.argv[4]   # full JSON-RPC string if --request used
 registry_path = sys.argv[5]
 
 def die(msg):
     print(json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": -32000, "message": msg}}))
     sys.exit(0)
 
+# ── Load registry ──────────────────────────────────────────────────────────────
 if not os.path.exists(registry_path):
     die(f"No server registry at {registry_path}. Run mcp_register.sh first.")
 
@@ -1663,6 +1664,7 @@ cfg = registry[server_name]
 cmd = [cfg["command"]] + cfg.get("args", [])
 env = {**os.environ, **cfg.get("env", {})}
 
+# ── Build the user request ────────────────────────────────────────────────────
 if request_raw:
     try:
         user_req = json.loads(request_raw)
@@ -1682,6 +1684,7 @@ else:
 
 req_id = user_req.get("id", 2)
 
+# ── MCP stdio: initialize → initialized → user_req → response ────────────────
 INIT_REQ = json.dumps({
     "jsonrpc": "2.0", "id": 1, "method": "initialize",
     "params": {
@@ -1704,6 +1707,7 @@ except Exception as e:
     die(f"Failed to start server '{server_name}': {e}")
 
 def readline_timeout(stream, timeout=10.0):
+    """Read one line; return None on timeout or EOF."""
     import select
     deadline = time.time() + timeout
     buf = ""
@@ -1720,9 +1724,11 @@ def readline_timeout(stream, timeout=10.0):
 
 result = None
 try:
+    # 1. Send initialize
     proc.stdin.write(INIT_REQ + "\n")
     proc.stdin.flush()
 
+    # 2. Read initialize response
     deadline = time.time() + 10
     while time.time() < deadline:
         line = readline_timeout(proc.stdout, timeout=2.0)
@@ -1744,11 +1750,15 @@ try:
                   "error": {"code": -32001, "message": "Initialize timeout"}}
 
     if result is None:
+        # 3. Send initialized notification
         proc.stdin.write(INIT_NOTIF + "\n")
         proc.stdin.flush()
+
+        # 4. Send user request
         proc.stdin.write(json.dumps(user_req) + "\n")
         proc.stdin.flush()
 
+        # 5. Read response (skip notifications)
         deadline = time.time() + 30
         while time.time() < deadline:
             line = readline_timeout(proc.stdout, timeout=2.0)
@@ -1761,6 +1771,7 @@ try:
                 continue
             try:
                 msg = json.loads(line)
+                # Skip notifications (no id field)
                 if "id" in msg and msg["id"] == req_id:
                     result = msg
                     break
@@ -1806,14 +1817,23 @@ cat > "$BRIDGE_ROOT/scripts/mcp_register.sh" <<'MCPREG'
 #
 # Examples
 # --------
+#   # Register the MCP filesystem server (npx)
 #   mcp_register.sh --name filesystem \
 #     --command npx \
 #     --args '["-y","@modelcontextprotocol/server-filesystem","/Users/me/projects"]'
 #
+#   # Register a postgres MCP server (uvx)
 #   mcp_register.sh --name postgres \
 #     --command uvx \
 #     --args '["mcp-server-postgres","postgresql://localhost/mydb"]'
 #
+#   # Register a custom CLI tool
+#   mcp_register.sh --name mytool --command /usr/local/bin/my-mcp-server
+#
+#   # Remove a server
+#   mcp_register.sh --remove filesystem
+#
+# Registry: $BRIDGE_ROOT/mcp_servers.json
 # Testability hooks
 #   BRIDGE_MCP_REGISTRY  override registry file path
 set -uo pipefail
@@ -1853,13 +1873,14 @@ done
 python3 - "$MODE" "$NAME" "$COMMAND" "$ARGS_JSON" "$ENV_JSON" "$REGISTRY" <<'PYEOF'
 import sys, json, os
 
-mode          = sys.argv[1]
-name          = sys.argv[2]
-command       = sys.argv[3]
-args_raw      = sys.argv[4]
-env_raw       = sys.argv[5]
+mode         = sys.argv[1]
+name         = sys.argv[2]
+command      = sys.argv[3]
+args_raw     = sys.argv[4]
+env_raw      = sys.argv[5]
 registry_path = sys.argv[6]
 
+# Load existing registry (or start fresh)
 registry = {}
 if os.path.exists(registry_path):
     try:
@@ -1881,9 +1902,11 @@ if mode == "list":
 
 if mode == "remove":
     if not name:
-        print("ERROR: --remove requires a server name", file=sys.stderr); sys.exit(1)
+        print("ERROR: --remove requires a server name", file=sys.stderr)
+        sys.exit(1)
     if name not in registry:
-        print(f"ERROR: '{name}' is not registered", file=sys.stderr); sys.exit(1)
+        print(f"ERROR: '{name}' is not registered", file=sys.stderr)
+        sys.exit(1)
     del registry[name]
     os.makedirs(os.path.dirname(registry_path), exist_ok=True)
     with open(registry_path, "w") as f:
@@ -1891,32 +1914,42 @@ if mode == "remove":
     print(f"✓ Removed '{name}' from registry")
     sys.exit(0)
 
+# register mode
 if not name:
-    print("ERROR: --name is required", file=sys.stderr); sys.exit(1)
+    print("ERROR: --name is required", file=sys.stderr)
+    sys.exit(1)
 if not command:
-    print("ERROR: --command is required", file=sys.stderr); sys.exit(1)
+    print("ERROR: --command is required", file=sys.stderr)
+    sys.exit(1)
 
 try:
     args = json.loads(args_raw)
-    if not isinstance(args, list): raise ValueError("--args must be a JSON array")
+    if not isinstance(args, list):
+        raise ValueError("--args must be a JSON array")
 except Exception as e:
-    print(f"ERROR: invalid --args JSON: {e}", file=sys.stderr); sys.exit(1)
+    print(f"ERROR: invalid --args JSON: {e}", file=sys.stderr)
+    sys.exit(1)
 
 try:
     env = json.loads(env_raw)
-    if not isinstance(env, dict): raise ValueError("--env must be a JSON object")
+    if not isinstance(env, dict):
+        raise ValueError("--env must be a JSON object")
 except Exception as e:
-    print(f"ERROR: invalid --env JSON: {e}", file=sys.stderr); sys.exit(1)
+    print(f"ERROR: invalid --env JSON: {e}", file=sys.stderr)
+    sys.exit(1)
 
 registry[name] = {"command": command, "args": args, "env": env}
+
 os.makedirs(os.path.dirname(registry_path), exist_ok=True)
 tmp = registry_path + ".tmp"
 with open(tmp, "w") as f:
     json.dump(registry, f, indent=2)
 os.replace(tmp, registry_path)
 
-print(f"✓ Registered '{name}'  →  {command} {' '.join(str(a) for a in args)}")
-print(f"  Registry: {registry_path}  ({len(registry)} server(s))")
+action = "Updated" if name in registry else "Registered"
+print(f"✓ {action} '{name}'  →  {command} {' '.join(str(a) for a in args)}")
+print(f"  Registry: {registry_path}")
+print(f"  Total servers: {len(registry)}")
 PYEOF
 MCPREG
 chmod +x "$BRIDGE_ROOT/scripts/mcp_register.sh"
@@ -1926,8 +1959,14 @@ cat > "$BRIDGE_ROOT/scripts/mcp_list_servers.sh" <<'MCPLIST'
 #!/usr/bin/env bash
 # mcp_list_servers.sh — list all MCP servers registered in the bridge registry.
 #
-# Usage: mcp_list_servers.sh [--json]
+# Usage
+# -----
+#   mcp_list_servers.sh [--json]
 #
+# Without --json: human-readable table.
+# With    --json: raw JSON of the registry (for programmatic use).
+#
+# Registry: $BRIDGE_ROOT/mcp_servers.json
 # Testability hooks
 #   BRIDGE_MCP_REGISTRY  override registry file path
 set -uo pipefail
@@ -1939,7 +1978,9 @@ JSON_OUT=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --json) JSON_OUT=1; shift ;;
-    -h|--help) echo "Usage: mcp_list_servers.sh [--json]" >&2; exit 0 ;;
+    -h|--help)
+      echo "Usage: mcp_list_servers.sh [--json]" >&2
+      exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 1 ;;
   esac
 done
@@ -1970,8 +2011,11 @@ except Exception as e:
     sys.exit(0)
 
 if json_out:
-    print(json.dumps({"servers": registry, "count": len(registry),
-                      "registry": registry_path}, indent=2))
+    print(json.dumps({
+        "servers": registry,
+        "count": len(registry),
+        "registry": registry_path,
+    }, indent=2))
     sys.exit(0)
 
 if not registry:
@@ -1987,7 +2031,9 @@ for name, cfg in sorted(registry.items()):
     if len(args_str) > 40:
         args_str = args_str[:37] + "..."
     print(f"  {name:<20}  {cfg['command']:<12}  {args_str}")
+
 print(f"\nRegistry: {registry_path}")
+print(f"Use mcp_proxy.sh to call any of these from Cowork.")
 PYEOF
 MCPLIST
 chmod +x "$BRIDGE_ROOT/scripts/mcp_list_servers.sh"

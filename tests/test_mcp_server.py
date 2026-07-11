@@ -6,8 +6,10 @@ Tests the JSON-RPC 2.0 / MCP protocol layer without requiring a live daemon.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).parent.parent
@@ -19,20 +21,29 @@ MCP_MODULE = REPO / "cowork_to_code_bridge" / "mcp_server.py"
 # ---------------------------------------------------------------------------
 
 def _send_recv(messages: list[dict], timeout: int = 10) -> list[dict]:
-    """Spawn the MCP server, send messages, collect responses, return them."""
-    proc = subprocess.Popen(
-        [sys.executable, str(MCP_MODULE), "--stdio"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    payload = "\n".join(json.dumps(m) for m in messages) + "\n"
-    try:
-        stdout, _ = proc.communicate(input=payload, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        raise
+    """Spawn the MCP server, send messages, collect responses, return them.
+
+    The server is run against an isolated, empty BRIDGE_ROOT so no daemon on
+    the host machine is reachable — this keeps daemon_alive deterministically
+    False and makes the protocol tests hermetic (they must not depend on
+    whether the bridge happens to be installed on the dev machine).
+    """
+    with tempfile.TemporaryDirectory() as bridge_root:
+        env = {**os.environ, "BRIDGE_ROOT": bridge_root}
+        proc = subprocess.Popen(
+            [sys.executable, str(MCP_MODULE), "--stdio"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+        payload = "\n".join(json.dumps(m) for m in messages) + "\n"
+        try:
+            stdout, _ = proc.communicate(input=payload, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            raise
 
     responses = []
     for line in stdout.splitlines():
@@ -47,6 +58,19 @@ def _rpc(method: str, params: dict | None = None, req_id: int = 1) -> dict:
     if params is not None:
         msg["params"] = params
     return msg
+
+
+def _init_rpc(req_id: int = 1) -> dict:
+    """A standard MCP `initialize` request (kept short to satisfy line length)."""
+    return _rpc(
+        "initialize",
+        {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "t", "version": "0"},
+        },
+        req_id=req_id,
+    )
 
 
 def _notification(method: str, params: dict | None = None) -> dict:
@@ -82,7 +106,7 @@ def test_mcp_server_initialize() -> None:
 def test_mcp_server_tools_list() -> None:
     """tools/list returns all expected tools with valid schemas."""
     responses = _send_recv([
-        _rpc("initialize", {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}, req_id=1),
+        _init_rpc(req_id=1),
         _notification("notifications/initialized"),
         _rpc("tools/list", {}, req_id=2),
     ])
@@ -111,7 +135,7 @@ def test_mcp_server_unknown_method() -> None:
 def test_mcp_server_unknown_tool() -> None:
     """tools/call with an unknown tool name returns isError=True."""
     responses = _send_recv([
-        _rpc("initialize", {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}, req_id=1),
+        _init_rpc(req_id=1),
         _rpc("tools/call", {"name": "does_not_exist", "arguments": {}}, req_id=2),
     ])
     by_id = {r["id"]: r for r in responses}
@@ -157,7 +181,7 @@ def test_mcp_server_daemon_alive_timeout_is_error() -> None:
     """daemon_alive with a real call returns isError=False but alive=False when no daemon."""
     # In CI there's no daemon, so alive=False — but the call itself must not crash.
     responses = _send_recv([
-        _rpc("initialize", {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}, req_id=1),
+        _init_rpc(req_id=1),
         _rpc("tools/call", {"name": "daemon_alive", "arguments": {"ping_timeout": 2}}, req_id=2),
     ])
     by_id = {r["id"]: r for r in responses}

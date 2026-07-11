@@ -270,6 +270,7 @@ def call_remote(
     idempotency_key: str | None = None,
     plan: str | None = None,
     max_budget_usd: float | None = None,
+    interactive: bool = False,
 ) -> dict[str, Any]:
     """Submit a script invocation to the Mac daemon and wait for its result.
 
@@ -283,6 +284,10 @@ def call_remote(
       - `max_budget_usd` sets a per-task spend ceiling for run_claude.sh calls.
         The owner's BRIDGE_MAX_BUDGET_USD is a hard upper limit; if both are set
         the daemon uses min(max_budget_usd, BRIDGE_MAX_BUDGET_USD).
+      - `interactive` is reserved for parity with call_remote_streaming's
+        mid-task question/answer flow; call_remote itself has no progress loop
+        to interleave it with, so it is accepted but currently unused here too
+        (matches the package's own call_remote).
     Raises TimeoutError if the daemon doesn't respond within timeout + 5s.
     """
     root = Path(bridge_root) if bridge_root else _resolve_bridge_root()
@@ -559,6 +564,90 @@ def daemon_alive(bridge_root=None, ping_timeout=10):
         return r.get("exit_code") == 0
     except TimeoutError:
         return False
+
+
+def post_message_to_cowork(
+    message_type: str,
+    content: str,
+    parent_task_id: str | None = None,
+    bridge_root: Path | str | None = None,
+) -> str:
+    """Post a message from Claude Code back to Cowork (bidirectional communication).
+
+    Args:
+        message_type: Type of message ("progress", "completed", "error", "info")
+        content: Message content (plain text or JSON string)
+        parent_task_id: Optional. The task_id of the parent task (sets parent field)
+        bridge_root: Override the auto-detected bridge directory
+
+    Returns:
+        request_id: The ID of the posted message (can be replied to)
+
+    This allows Claude Code (running on the machine) to post structured messages
+    back to Cowork. Messages are written to to_cowork/ folder for Cowork to detect.
+    """
+    root = Path(bridge_root) if bridge_root else _resolve_bridge_root()
+    to_cowork = root / "to_cowork"
+    to_cowork.mkdir(parents=True, exist_ok=True)
+
+    request_id = f"msg_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+    message = {
+        "id": request_id,
+        "type": message_type,
+        "content": content,
+        "ts": time.time(),
+        "from": "claude-code",
+    }
+    if parent_task_id:
+        message["parent"] = parent_task_id
+
+    msg_file = to_cowork / f"{request_id}.json"
+    tmp = msg_file.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(message))
+    tmp.rename(msg_file)
+
+    return request_id
+
+
+def detect_messages_from_claude_code(
+    parent_task_id: str | None = None,
+    bridge_root: Path | str | None = None,
+) -> list[dict[str, Any]]:
+    """Detect and retrieve messages posted by Claude Code (bidirectional communication).
+
+    Args:
+        parent_task_id: Optional. Only return messages with this parent_task_id
+        bridge_root: Override the auto-detected bridge directory
+
+    Returns:
+        List of message dicts {id, type, content, ts, from, parent (if set)}
+        Returns empty list if no messages found.
+
+    Messages are detected from to_cowork/ folder. If parent_task_id is specified,
+    only messages with matching parent are returned. This is fully idempotent.
+    """
+    root = Path(bridge_root) if bridge_root else _resolve_bridge_root()
+    to_cowork = root / "to_cowork"
+
+    if not to_cowork.exists():
+        return []
+
+    messages = []
+    for msg_file in sorted(to_cowork.glob("*.json")):
+        if msg_file.suffix == ".answered":
+            continue  # Skip already-answered messages
+        try:
+            msg = json.loads(msg_file.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+
+        # Filter by parent if specified
+        if parent_task_id and msg.get("parent") != parent_task_id:
+            continue
+
+        messages.append(msg)
+
+    return messages
 
 
 if __name__ == "__main__":

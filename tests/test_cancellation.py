@@ -11,7 +11,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from cowork_to_code_bridge.mcp_server import MCPServer
+from cowork_to_code_bridge.mcp_operations import MCPServer
 
 
 def test_cancellation_pre_execution():
