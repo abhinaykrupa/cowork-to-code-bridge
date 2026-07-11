@@ -93,17 +93,14 @@ r = call_remote(
     "scripts/run_claude.sh",
     args=["Summarise the last 10 commits", "/Users/<them>/projects/app"],
     timeout=120, idempotency_key="summarise-1",
-    permission_scope="readonly",   # Read/Glob/Grep only — no edits, no shell
+    permission_mode="plan",   # read-only: no edits, no shell commands
 )
 ```
 
-Valid `permission_scope` values (least → most permissive): `"plan"` (read +
-reason only), `"readonly"` (Read/Glob/Grep), `"edit"` (file edits, no shell),
-`"full"` (no extra restriction). The daemon resolves the scope to a vetted
-`CLAUDE_FLAGS` set from a **fixed allowlist** — a caller can never pass arbitrary
-flags, so the bridge token can't widen trust to full shell. An owner-set
-`CLAUDE_FLAGS` (in the launchd/systemd unit) always wins; omit `permission_scope`
-to use the owner's global flags unchanged.
+Valid `permission_mode` values (least → most permissive): `"plan"`, `"acceptEdits"`,
+`"bypassPermissions"`. The daemon enforces the owner's `BRIDGE_PERMISSION_CEILING`
+\u2014 a mode above the ceiling is rejected before any script runs. Omit `permission_mode`
+to use the owner's global `CLAUDE_FLAGS` unchanged.
 
 ### Long tasks — stream live progress (don't wait blind)
 
@@ -148,23 +145,6 @@ print(r["exit_code"]); print(r["stdout"])
 `on_status` is called every ~2s with `{"elapsed_s": int, "last_line": str, "state": "running"|"done"|"error"}`.
 `on_progress` and `on_status` are independent — use either or both.
 
-**Async path (`queue_task` + `poll_task_result`):** when you fire-and-forget a long
-task, each `poll_task_result` while it's running now also returns the live ticker
-fields (`elapsed_s`, `last_line`, `state`) plus a ready-made `status_line` string:
-
-```python
-from cowork_to_code_bridge import queue_task, poll_task_result
-t = queue_task("scripts/run_claude.sh", args=["build my app"])
-while True:
-    s = poll_task_result(t["task_id"])
-    if s["status"] == "running":
-        print(s.get("status_line", "…running"))   # e.g. "⣾ Working… 42s elapsed"
-    elif s["status"] == "completed":
-        print(s["stdout"]); break
-```
-
-Roll your own label with `format_status_line(s, verb="Building", show_last_line=True)`.
-
 ## Step 3 — quick fixed actions (no agent needed)
 
 For simple, fast system queries, call a ready-made script directly:
@@ -176,16 +156,108 @@ For simple, fast system queries, call a ready-made script directly:
 | "disk space?" | `call_remote("scripts/mac_disk.sh")` |
 | "what's using CPU?" | `call_remote("scripts/mac_top.sh")` |
 | "network status?" | `call_remote("scripts/mac_network.sh")` |
-| "what's listening on port 3000?" | `call_remote("scripts/port_check.sh", args=["3000"])` (add `"--json"` → `{port, listening, tool, raw}`) |
-| "what Docker containers are running?" | `call_remote("scripts/docker_ps.sh")` (add `"--json"` → `{ok, error, containers:[{name,image,status,ports}]}`) |
-| "what's the git status of ~/myproject?" | `call_remote("scripts/git_status.sh", args=["/path/to/repo"])` (add `"--json"` for a parseable `{branch, upstream, ahead, behind, clean, files:[{x,y,path}]}` object) |
-| "any outdated packages?" | `call_remote("scripts/pkg_outdated.sh")` (add `"--json"` → `{manager, count, packages, raw}`) |
-| "check the bridge environment" | `call_remote("scripts/env_check.sh")` (add `"--json"` → `{bridge_root, bridge_root_exists, bridge_token_set, claude_flags, shell, home, os, claude_cli}`) |
+| "what's listening on port 3000?" | `call_remote("scripts/port_check.sh", args=["3000"])` |
+| "what Docker containers are running?" | `call_remote("scripts/docker_ps.sh")` |
+| "what's the git status of ~/myproject?" | `call_remote("scripts/git_status.sh", args=["/path/to/repo"])` |
+| "any outdated packages?" | `call_remote("scripts/pkg_outdated.sh")` |
 | "what MCPs do you have on your machine?" | `call_remote("scripts/mcp_audit.sh")` |
-| "stop my Rails server" / "kill pid 1234" | `call_remote("scripts/process_kill.sh", args=["rails"])` (add `"--all"` to kill every match; protected procs and PID ≤ 10 refused) |
 
 For a repeatable custom action, help the user save a small script in
 `~/.cowork-to-code-bridge/scripts/` on their Mac, then call it by name.
+
+## Step 4 — reach local MCP servers (no HTTPS tunnel needed)
+
+Claude Cowork only permits MCP connectors via public HTTPS endpoints. If you have
+a local stdio MCP server — a database client, filesystem tool, or custom CLI — it's
+normally unreachable from Cowork without a public tunnel.
+
+The bridge solves this. Register the server once on the Mac, then call it from Cowork
+through the existing file-based transport. No tunnel, no TLS cert, no exposed port.
+
+Addresses: [anthropics/claude-code#53476](https://github.com/anthropics/claude-code/issues/53476),
+[anthropics/claude-code#48909](https://github.com/anthropics/claude-code/issues/48909)
+
+### 1 — Register the MCP server (run once on the Mac)
+
+```python
+# Register the MCP filesystem server
+r = call_remote("scripts/mcp_register.sh", args=[
+    "--name", "filesystem",
+    "--command", "npx",
+    "--args", '["-y","@modelcontextprotocol/server-filesystem","/Users/me/projects"]',
+])
+print(r["stdout"])
+
+# Register a Postgres MCP server
+r = call_remote("scripts/mcp_register.sh", args=[
+    "--name", "postgres",
+    "--command", "uvx",
+    "--args", '["mcp-server-postgres","postgresql://localhost/mydb"]',
+])
+print(r["stdout"])
+```
+
+See what's registered:
+```python
+r = call_remote("scripts/mcp_list_servers.sh", args=["--json"])
+import json
+servers = json.loads(r["stdout"])
+print(servers)
+```
+
+### 2 — Call MCP tools from Cowork
+
+Use the `call_mcp_tool()` helper (already in `bridge_client.py`):
+
+```python
+from bridge_client import call_mcp_tool
+
+# List available tools on the filesystem server
+r = call_mcp_tool("filesystem", "tools/list", {})
+tools = r["mcp_response"]["result"]["tools"]
+for t in tools:
+    print(t["name"], "—", t.get("description", ""))
+
+# Read a file via the filesystem MCP
+r = call_mcp_tool("filesystem", "tools/call", {
+    "name": "read_file",
+    "arguments": {"path": "/Users/me/projects/myapp/README.md"},
+})
+content = r["mcp_response"]["result"]["content"][0]["text"]
+print(content)
+
+# Query Postgres via MCP
+r = call_mcp_tool("postgres", "tools/call", {
+    "name": "query",
+    "arguments": {"sql": "SELECT count(*) FROM users"},
+})
+row = r["mcp_response"]["result"]["content"][0]["text"]
+print(row)
+```
+
+Always check for errors:
+```python
+resp = r.get("mcp_response", {})
+if "error" in resp:
+    print("MCP error:", resp["error"]["message"])
+elif r.get("exit_code") != 0:
+    print("Bridge error:", r.get("stderr"))
+```
+
+### 3 — Quick-action table
+
+| User asks | Call |
+|---|---|
+| "what local MCP servers are registered?" | `call_remote("scripts/mcp_list_servers.sh", args=["--json"])` |
+| "register my postgres MCP" | `call_remote("scripts/mcp_register.sh", args=["--name","postgres","--command","uvx","--args",'["mcp-server-postgres","postgresql://localhost/mydb"]'])` |
+| "list tools on filesystem MCP" | `call_mcp_tool("filesystem", "tools/list", {})` |
+| "read a file via MCP" | `call_mcp_tool("filesystem", "tools/call", {"name":"read_file","arguments":{"path":"/path/to/file"}})` |
+
+`mcp_proxy.sh` always exits 0 — MCP-level errors appear inside the JSON under
+`r["mcp_response"]["error"]`, not the process exit code.
+
+## Step 6 — check the inbox (reverse direction: Claude Code → Cowork)
+## Step 5 — cross-surface MCP audit
 
 ### Cross-surface MCP audit
 
@@ -216,7 +288,6 @@ this Cowork session. Any MCP present locally but absent here is a gap —
 the user may need to install the corresponding Cowork plugin or expose the
 MCP via the bridge.
 
-## Step 4 — check the inbox (reverse direction: Claude Code → Cowork)
 
 Claude Code on the user's machine can leave requests for a Cowork session in
 `BRIDGE_ROOT/to_cowork/`. When the user says "check my inbox", "any requests
@@ -235,29 +306,4 @@ for p in pending:
     print(req["id"], "→", req["request"])
     # ... do the requested work (it's a plain-English task from the machine) ...
     # then write a reply and archive the request:
-    # json.dump({"id": req["id"], "reply": "<what you did>", "ts": time.time()},
-    #           open(os.path.join(replies, req["id"] + ".json"), "w"))
-    # os.remove(p)
-```
-
-**Honest limitation:** this only works while a Cowork session is open and the
-user asks to check — there's no way to wake Cowork from the machine. It's an
-async hand-off inbox, not a live channel. If the user wants a guaranteed live
-exchange, they should just ask here directly.
-
-## Result shape & errors
-
-`call_remote` returns a dict: `exit_code`, `stdout`, `stderr`. Special codes:
-- `-1` daemon refused (bad/unknown script, token mismatch)
-- `-2` script timed out
-- `-3` internal daemon error
-- `-4` daemon crashed mid-run — indeterminate, NOT retried (treat as unknown)
-- `idempotent_replay: True` → this was a cached result from a same-key retry
-
-Raises `TimeoutError` if the daemon never responds → tell the user to check it's
-running (the installer sets it to auto-start; a reboot shouldn't break it).
-
-## What to tell the user
-Be brief: "Running that on your Mac via Claude Code…" then show the relevant
-output. Don't dump the whole result dict unless asked. Never claim success
-without a `BRIDGE LIVE` / `exit_code == 0`.
+    # json.dump({"id": req["id"], "rep

@@ -28,6 +28,7 @@ Or run it directly as a probe:
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import time
@@ -269,9 +270,6 @@ def call_remote(
     idempotency_key: str | None = None,
     plan: str | None = None,
     max_budget_usd: float | None = None,
-    permission_scope: str | None = None,
-    model_tier: str | None = None,
-    effort: str | None = None,
 ) -> dict[str, Any]:
     """Submit a script invocation to the Mac daemon and wait for its result.
 
@@ -311,12 +309,6 @@ def call_remote(
         payload["plan"] = plan
     if max_budget_usd is not None:
         payload["max_budget_usd"] = float(max_budget_usd)
-    if permission_scope is not None:
-        payload["permission_scope"] = str(permission_scope)
-    if model_tier is not None:
-        payload["model_tier"] = str(model_tier).strip().lower()
-    if effort is not None:
-        payload["effort"] = str(effort).strip().lower()
 
     token = _load_token(root)
     if token:
@@ -350,8 +342,7 @@ def call_remote_streaming(script, args=None, timeout=600, poll_interval=1.0,
                           cwd=None, env=None, bridge_root=None,
                           idempotency_key=None, on_progress=None, on_status=None,
                           plan=None, max_budget_usd=None,
-                          interactive=False, permission_scope=None,
-                          model_tier=None, effort=None) -> dict[str, Any]:
+                          interactive=False) -> dict[str, Any]:
     """Like call_remote, but streams live output while the task runs.
 
     The daemon tees the script's output to progress/<id>.log; this polls it and
@@ -367,14 +358,6 @@ def call_remote_streaming(script, args=None, timeout=600, poll_interval=1.0,
         exit_code  (int)  present only when state != "running"
     Called only when the file changes (mtime-gated), so it fires at most once
     per daemon write cycle (~2 s).
-
-    interactive: when True, each poll iteration also scans to_cowork/*.json for
-    a request whose "parent" field matches this cmd_id. If found, returns early
-    with shape:
-        {"state": "awaiting_reply", "cmd_id": ..., "request_id": ...,
-         "question": ..., "from": "claude-code"}
-    The caller should show the question, call reply_to_machine(request_id, answer),
-    then call resume_remote(cmd_id, remaining_deadline) to re-enter the wait loop.
     """
     root = Path(bridge_root) if bridge_root else _resolve_bridge_root()
     queue = root / "queue"; results = root / "results"; progress = root / "progress"
@@ -388,9 +371,6 @@ def call_remote_streaming(script, args=None, timeout=600, poll_interval=1.0,
     if idempotency_key: payload["idempotency_key"] = idempotency_key
     if plan is not None: payload["plan"] = plan
     if max_budget_usd is not None: payload["max_budget_usd"] = float(max_budget_usd)
-    if permission_scope is not None: payload["permission_scope"] = str(permission_scope)
-    if model_tier is not None: payload["model_tier"] = str(model_tier).strip().lower()
-    if effort is not None: payload["effort"] = str(effort).strip().lower()
     token = _load_token(root)
     if token: payload["token"] = token
     cmd_file = queue / f"{cmd_id}.json"
@@ -445,20 +425,59 @@ def call_remote_streaming(script, args=None, timeout=600, poll_interval=1.0,
     raise TimeoutError(f"bridge: no result for {cmd_id} within {timeout + 5}s.")
 
 
-def reply_to_machine(
-    request_id: str,
-    text: str,
-    bridge_root: Path | str | None = None,
-) -> None:
+def call_mcp_tool(
+    server: str,
+    method: str,
+    params: dict | None = None,
+    timeout: int = 60,
+    bridge_root: str | None = None,
+    mcp_proxy_url: str | None = None,
+) -> dict:
+    """Call a tool on a local stdio MCP server via the bridge proxy.
+
+    The MCP server must be registered on the Mac with mcp_register.sh first.
+
+    Args:
+        server:  Name of the registered MCP server (e.g. "filesystem", "postgres").
+        method:  MCP JSON-RPC method (e.g. "tools/list", "tools/call").
+        params:  Method parameters dict (e.g. {"name": "query", "arguments": {...}}).
+        timeout: Seconds to wait for the response.
+
+    Returns:
+        The JSON-RPC response dict.  Check for a top-level "error" key on failure.
+        The bridge result is in r["stdout"] (already parsed as JSON for convenience).
+
+    Example::
+
+        r = call_mcp_tool("filesystem", "tools/list", {})
+        tools = json.loads(r["stdout"])["result"]["tools"]
+
+        r = call_mcp_tool("postgres", "tools/call", {
+            "name": "query",
+            "arguments": {"sql": "SELECT count(*) FROM users"},
+        })
+        row = json.loads(r["stdout"])["result"]["content"][0]["text"]
+    """
+    args = ["--server", server, "--method", method]
+    if params is not None:
+        args += ["--params", json.dumps(params)]
+    if mcp_proxy_url is not None:
+        args += ["--proxy-url", mcp_proxy_url]
+    r = call_remote("scripts/mcp_proxy.sh", args=args, timeout=timeout,
+                    bridge_root=bridge_root)
+    # Parse the JSON-RPC response out of stdout for callers that want direct access.
+    if r.get("exit_code") == 0 and r.get("stdout"):
+        with contextlib.suppress(Exception):
+            r["mcp_response"] = json.loads(r["stdout"])
+    return r
+
+
+def reply_to_machine(request_id, text, bridge_root=None):
     """Write a reply to a mid-task question raised by a running script.
 
     Call this after call_remote_streaming returns {"state": "awaiting_reply"}.
-    Writes the reply JSON to cowork_results/<request_id>.json so request_cowork.sh
-    --wait polling on the Mac side picks it up and unblocks the script.
-
-    Args:
-        request_id: the "request_id" field from the awaiting_reply dict.
-        text:       the answer to send back (plain string).
+    Writes the reply JSON to cowork_results/<request_id>.json so the script
+    polling --wait on the Mac side picks it up and unblocks.
     """
     root = Path(bridge_root) if bridge_root else _resolve_bridge_root()
     cowork_results = root / "cowork_results"
@@ -466,19 +485,11 @@ def reply_to_machine(
     reply = {"id": request_id, "reply": text, "ts": time.time(), "from": "cowork"}
     out = cowork_results / f"{request_id}.json"
     tmp = out.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(reply))
-    tmp.rename(out)
+    tmp.write_text(json.dumps(reply)); tmp.rename(out)
 
 
-def resume_remote(
-    cmd_id: str,
-    deadline: float,
-    poll_interval: float = 1.0,
-    on_progress=None,
-    on_status=None,
-    interactive: bool = True,
-    bridge_root: Path | str | None = None,
-) -> dict[str, Any]:
+def resume_remote(cmd_id, deadline, poll_interval=1.0, on_progress=None,
+                  on_status=None, interactive=True, bridge_root=None):
     """Re-enter the wait loop for a task after answering its question.
 
     Call this after reply_to_machine() to continue waiting for the task's
@@ -486,22 +497,17 @@ def resume_remote(
 
     Args:
         cmd_id:    the "cmd_id" from the awaiting_reply dict.
-        deadline:  the "_deadline" from the awaiting_reply dict (absolute epoch time).
+        deadline:  the "_deadline" from the awaiting_reply dict (absolute epoch).
                    Preserves the original timeout budget — the clock never resets.
-    Returns:
-        Same dict shapes as call_remote_streaming: final result or another
-        awaiting_reply if the task asks another question.
     """
     root = Path(bridge_root) if bridge_root else _resolve_bridge_root()
-    results = root / "results"
-    progress = root / "progress"
+    results = root / "results"; progress = root / "progress"
     to_cowork = root / "to_cowork"
     result_file = results / f"{cmd_id}.json"
     progress_file = progress / f"{cmd_id}.log"
     status_file = progress / f"{cmd_id}.status.json"
     emit = on_progress or (lambda chunk: print(chunk, end="", flush=True))
-    seen = 0
-    last_status_mtime: float = 0.0
+    seen = 0; last_status_mtime: float = 0.0
     while time.time() < deadline:
         try:
             if progress_file.exists():
@@ -545,8 +551,7 @@ def resume_remote(
         f"bridge: no result for {cmd_id} — deadline expired while waiting for reply."
     )
 
-
-def daemon_alive(bridge_root: Path | str | None = None, ping_timeout: int = 10) -> bool:
+def daemon_alive(bridge_root=None, ping_timeout=10):
     """Quick health check — submits the ping script and waits for exit_code==0."""
     try:
         r = call_remote("scripts/ping.sh", args=[], timeout=ping_timeout,
@@ -556,92 +561,7 @@ def daemon_alive(bridge_root: Path | str | None = None, ping_timeout: int = 10) 
         return False
 
 
-def post_message_to_cowork(
-    message_type: str,
-    content: str,
-    parent_task_id: str | None = None,
-    bridge_root: Path | str | None = None,
-) -> str:
-    """Post a message from Claude Code back to Cowork (bidirectional communication).
-
-    Args:
-        message_type: Type of message ("progress", "completed", "error", "info")
-        content: Message content (plain text or JSON string)
-        parent_task_id: Optional. The task_id of the parent task (sets parent field)
-        bridge_root: Override the auto-detected bridge directory
-
-    Returns:
-        request_id: The ID of the posted message (can be replied to)
-
-    This allows Claude Code (running on the machine) to post structured messages
-    back to Cowork. Messages are written to to_cowork/ folder for Cowork to detect.
-    """
-    root = Path(bridge_root) if bridge_root else _resolve_bridge_root()
-    to_cowork = root / "to_cowork"
-    to_cowork.mkdir(parents=True, exist_ok=True)
-
-    request_id = f"msg_{int(time.time())}_{uuid.uuid4().hex[:8]}"
-    message = {
-        "id": request_id,
-        "type": message_type,
-        "content": content,
-        "ts": time.time(),
-        "from": "claude-code",
-    }
-    if parent_task_id:
-        message["parent"] = parent_task_id
-
-    msg_file = to_cowork / f"{request_id}.json"
-    tmp = msg_file.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(message))
-    tmp.rename(msg_file)
-
-    return request_id
-
-
-def detect_messages_from_claude_code(
-    parent_task_id: str | None = None,
-    bridge_root: Path | str | None = None,
-) -> list[dict[str, Any]]:
-    """Detect and retrieve messages posted by Claude Code (bidirectional communication).
-
-    Args:
-        parent_task_id: Optional. Only return messages with this parent_task_id
-        bridge_root: Override the auto-detected bridge directory
-
-    Returns:
-        List of message dicts {id, type, content, ts, from, parent (if set)}
-        Returns empty list if no messages found.
-
-    Messages are detected from to_cowork/ folder. If parent_task_id is specified,
-    only messages with matching parent are returned. This is fully idempotent.
-    """
-    root = Path(bridge_root) if bridge_root else _resolve_bridge_root()
-    to_cowork = root / "to_cowork"
-
-    if not to_cowork.exists():
-        return []
-
-    messages = []
-    for msg_file in sorted(to_cowork.glob("*.json")):
-        if msg_file.suffix == ".answered":
-            continue  # Skip already-answered messages
-        try:
-            msg = json.loads(msg_file.read_text())
-        except (OSError, json.JSONDecodeError):
-            continue
-
-        # Filter by parent if specified
-        if parent_task_id and msg.get("parent") != parent_task_id:
-            continue
-
-        messages.append(msg)
-
-    return messages
-
-
 if __name__ == "__main__":
-    # Run directly as a probe: prints LIVE / NOT REACHABLE.
     alive = daemon_alive(ping_timeout=10)
     print("BRIDGE LIVE" if alive else "DAEMON NOT REACHABLE")
     raise SystemExit(0 if alive else 1)

@@ -492,50 +492,7 @@ elif [[ -n "$OWNER_CEILING" ]]; then
   BUDGET_FLAGS=(--max-budget-usd "$OWNER_CEILING")
 fi
 
-# ── Model tier → --model ────────────────────────────────────────────────────
-# CLAUDE_MODEL_TIER: routing tier injected by the daemon (haiku|sonnet|opus|fable).
-# Map it to the concrete model ID the claude CLI expects. Keep in sync with
-# cowork_to_code_bridge/model_router.py's TIER_TO_MODEL_ID (the canonical source).
-# An unset/unknown tier means: don't pass --model, let the CLI pick its default.
-MODEL_FLAGS=()
-tier_to_model_id() {
-  case "$1" in
-    haiku)  echo "claude-haiku-4-5-20251001" ;;
-    sonnet) echo "claude-sonnet-4-6" ;;
-    opus)   echo "claude-opus-4-8" ;;
-    fable)  echo "claude-fable-5" ;;
-    *)      echo "" ;;
-  esac
-}
-if [[ -n "${CLAUDE_MODEL_TIER:-}" ]]; then
-  MODEL_ID="$(tier_to_model_id "$(echo "$CLAUDE_MODEL_TIER" | tr '[:upper:]' '[:lower:]')")"
-  if [[ -n "$MODEL_ID" ]]; then
-    log "model tier '$CLAUDE_MODEL_TIER' → --model $MODEL_ID"
-    MODEL_FLAGS=(--model "$MODEL_ID")
-  else
-    log "unknown CLAUDE_MODEL_TIER='$CLAUDE_MODEL_TIER' — using CLI default model"
-  fi
-fi
-
-# ── Effort → --effort ───────────────────────────────────────────────────────
-# CLAUDE_EFFORT: reasoning-effort tier injected by the daemon (issue #33). The
-# claude CLI accepts --effort <low|medium|high|xhigh|max>; a lower effort is
-# cheaper/faster for trivial tasks, higher for hard multi-file work. An unset or
-# unknown value means: don't pass --effort, let the CLI pick its default. Kept in
-# sync with the daemon's CLAUDE_EFFORT validation set.
-EFFORT_FLAGS=()
-if [[ -n "${CLAUDE_EFFORT:-}" ]]; then
-  EFFORT_LEVEL="$(echo "$CLAUDE_EFFORT" | tr '[:upper:]' '[:lower:]')"
-  case "$EFFORT_LEVEL" in
-    low|medium|high|xhigh|max)
-      log "effort '$CLAUDE_EFFORT' → --effort $EFFORT_LEVEL"
-      EFFORT_FLAGS=(--effort "$EFFORT_LEVEL") ;;
-    *)
-      log "unknown CLAUDE_EFFORT='$CLAUDE_EFFORT' — using CLI default effort" ;;
-  esac
-fi
-
-exec "$CLAUDE_BIN" "${EXTRA_FLAGS[@]}" "${MODEL_FLAGS[@]}" "${EFFORT_FLAGS[@]}" "${BUDGET_FLAGS[@]}" -p "$TASK" --output-format text
+exec "$CLAUDE_BIN" "${EXTRA_FLAGS[@]}" "${BUDGET_FLAGS[@]}" -p "$TASK" --output-format text
 RUNCLAUDE
 chmod +x "$BRIDGE_ROOT/scripts/run_claude.sh"
 
@@ -1470,44 +1427,7 @@ chmod +x "$BRIDGE_ROOT/scripts/request_cowork.sh"
 mkdir -p "$BRIDGE_ROOT/to_cowork" "$BRIDGE_ROOT/cowork_results"
 chmod 700 "$BRIDGE_ROOT/to_cowork" "$BRIDGE_ROOT/cowork_results" 2>/dev/null || true
 
-# escalate_to_claude.sh — hand a task from an external agent (Hermes, cron, etc.)
-# to Claude Code running on this machine.
-cat > "$BRIDGE_ROOT/scripts/escalate_to_claude.sh" <<'ESCL'
-#!/usr/bin/env bash
-# escalate_to_claude.sh — hand a task from Hermes/daemon to Claude Code on this machine.
-# Usage: escalate_to_claude.sh "Debug the API issue" [--wait SECONDS]
-set -euo pipefail
-BRIDGE_ROOT="${BRIDGE_ROOT:-$HOME/.cowork-to-code-bridge}"
-INBOX="$BRIDGE_ROOT/to_cowork"; REPLIES="$BRIDGE_ROOT/cowork_results"
-REQUEST="${1:?usage: escalate_to_claude.sh \"<escalation text>\" [--wait SECONDS]}"; shift || true
-WAIT=0
-if [[ "${1:-}" == "--wait" ]]; then
-  WAIT="${2:-300}"
-  [[ "$WAIT" =~ ^[0-9]+$ ]] || { echo "--wait expects seconds, got: $WAIT" >&2; exit 2; }
-  shift 2 || true
-fi
-mkdir -p "$INBOX" "$REPLIES"; chmod 700 "$INBOX" "$REPLIES" 2>/dev/null || true
-ID="$(date +%s)_$$_${RANDOM}"
-TOKEN=""
-[[ -f "$BRIDGE_ROOT/.env" ]] && TOKEN="$(grep '^BRIDGE_TOKEN=' "$BRIDGE_ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]')"
-TMP="$INBOX/.$ID.json.tmp"; OUT="$INBOX/$ID.json"
-python3 - "$ID" "$REQUEST" "$TOKEN" >"$TMP" <<'PY'
-import json,sys,time,os
-_id,req,tok=sys.argv[1],sys.argv[2],sys.argv[3]
-o={"id":_id,"request":req,"ts":time.time(),"from":"escalation-daemon","escalation_context":{"hostname":os.uname().nodename,"user":os.getenv("USER","unknown"),"cwd":os.getcwd()}}
-if tok:o["token"]=tok
-print(json.dumps(o))
-PY
-mv "$TMP" "$OUT"; echo "escalation queued for Claude Code: $OUT"
-if [[ "$WAIT" -gt 0 ]]; then
-  RF="$REPLIES/$ID.json"; dl=$(( $(date +%s)+WAIT ))
-  while [[ "$(date +%s)" -lt "$dl" ]]; do [[ -f "$RF" ]] && { echo "=== Claude Code reply ==="; cat "$RF"; exit 0; }; sleep 2; done
-  echo "no reply within ${WAIT}s; escalation stays queued." >&2
-fi
-ESCL
-chmod +x "$BRIDGE_ROOT/scripts/escalate_to_claude.sh"
-
-chmod +x "$BRIDGE_ROOT"/scripts/mac_*.sh "$BRIDGE_ROOT/scripts/port_check.sh" "$BRIDGE_ROOT/scripts/docker_ps.sh" "$BRIDGE_ROOT/scripts/docker_logs.sh" "$BRIDGE_ROOT/scripts/pkg_outdated.sh" "$BRIDGE_ROOT/scripts/git_status.sh" "$BRIDGE_ROOT/scripts/list_scripts.sh" "$BRIDGE_ROOT/scripts/env_check.sh" "$BRIDGE_ROOT/scripts/disk_hogs.sh" "$BRIDGE_ROOT/scripts/open_browser.sh" "$BRIDGE_ROOT/scripts/escalate_to_claude.sh"
+chmod +x "$BRIDGE_ROOT"/scripts/mac_*.sh "$BRIDGE_ROOT/scripts/port_check.sh" "$BRIDGE_ROOT/scripts/docker_ps.sh" "$BRIDGE_ROOT/scripts/docker_logs.sh" "$BRIDGE_ROOT/scripts/pkg_outdated.sh" "$BRIDGE_ROOT/scripts/git_status.sh" "$BRIDGE_ROOT/scripts/list_scripts.sh" "$BRIDGE_ROOT/scripts/env_check.sh" "$BRIDGE_ROOT/scripts/disk_hogs.sh" "$BRIDGE_ROOT/scripts/open_browser.sh"
 
 # process_kill.sh — terminate a named process or PID from Cowork.
 # Safety guards: refuses PID ≤ 10, refuses protected names (launchd/kernel_task/
@@ -1520,12 +1440,11 @@ cat > "$BRIDGE_ROOT/scripts/process_kill.sh" <<'PK'
 #
 # Usage
 # -----
-#   process_kill.sh <name|PID> [--all] [--json]
+#   process_kill.sh <name|PID> [--all]
 #
 #   Name path : exact match via pgrep -x.
 #               Refuses if >1 match unless --all is passed.
 #   PID path  : numeric PID; must exist and be > 10.
-#   --json    : emit a machine-parseable result object instead of text.
 #
 # Safety guards
 # -------------
@@ -1533,13 +1452,6 @@ cat > "$BRIDGE_ROOT/scripts/process_kill.sh" <<'PK'
 #   - Protected names refused: launchd, kernel_task, systemd, init, kernel, kthreadd
 #   - Sends SIGTERM (graceful), never SIGKILL
 #   - Confirms process is gone after the signal
-#
-# JSON output (--json)
-# --------------------
-# A stable object Cowork can consume without scraping text:
-#   { "ok", "target", "mode": "pid"|"name", "killed": [pids],
-#     "remaining": [pids], "error": "<msg or null>" }
-# On refusal/error, ok=false and error is set; killed/remaining reflect state.
 #
 # Works on macOS and Linux. No deps beyond bash + coreutils.
 #
@@ -1551,16 +1463,10 @@ set -uo pipefail
 BRIDGE_PGREP_CMD="${BRIDGE_PGREP_CMD:-pgrep}"
 BRIDGE_KILL_CMD="${BRIDGE_KILL_CMD:-kill}"
 
-TARGET="${1:?usage: process_kill.sh <name|PID> [--all] [--json]}"
+TARGET="${1:?usage: process_kill.sh <name|PID> [--all]}"
 ALL_FLAG=0
-JSON=0
 shift || true
-for arg in "$@"; do
-  case "$arg" in
-    --all)  ALL_FLAG=1 ;;
-    --json) JSON=1 ;;
-  esac
-done
+for arg in "$@"; do [[ "$arg" == "--all" ]] && ALL_FLAG=1; done
 
 PROTECTED_NAMES=("launchd" "kernel_task" "systemd" "init" "kernel" "kthreadd")
 
@@ -1572,40 +1478,10 @@ _is_protected() {
   return 1
 }
 
-# ── JSON emitters ────────────────────────────────────────────────────────────
-# Emit a JSON result and exit with the given code. Whitespace-separated PID
-# lists are turned into JSON arrays; error is a string or null.
-_json_emit() {
-  local ok="$1" mode="$2" killed="$3" remaining="$4" err="$5" code="$6"
-  python3 - "$ok" "$TARGET" "$mode" "$killed" "$remaining" "$err" <<'PY'
-import json, sys
-ok, target, mode, killed, remaining, err = sys.argv[1:7]
-to_list = lambda s: [int(x) for x in s.split()] if s.strip() else []
-print(json.dumps({
-    "ok": ok == "1",
-    "target": target,
-    "mode": mode,
-    "killed": to_list(killed),
-    "remaining": to_list(remaining),
-    "error": err if err else None,
-}))
-PY
-  exit "$code"
-}
-
-# Fail helper: in JSON mode emit structured error, else print to stderr.
-_fail() {
-  local msg="$1" mode="${2:-}" code="${3:-1}"
-  if [[ "$JSON" -eq 1 ]]; then
-    _json_emit 0 "$mode" "" "" "$msg" "$code"
-  fi
-  echo "ERROR: $msg" >&2
-  exit "$code"
-}
-
 # Refuse protected names before any pgrep/kill call.
 if _is_protected "$TARGET"; then
-  _fail "refusing to kill protected process: $TARGET" "" 1
+  echo "ERROR: refusing to kill protected process: $TARGET" >&2
+  exit 1
 fi
 
 # ─── PID path ─────────────────────────────────────────────────────────────────
@@ -1613,34 +1489,31 @@ if [[ "$TARGET" =~ ^[0-9]+$ ]]; then
   PID="$TARGET"
 
   if (( PID <= 10 )); then
-    _fail "refusing to kill PID $PID (≤ 10 is kernel/init territory)" "pid" 1
+    echo "ERROR: refusing to kill PID $PID (≤ 10 is kernel/init territory)" >&2
+    exit 1
   fi
 
   if ! "$BRIDGE_KILL_CMD" -0 "$PID" 2>/dev/null; then
-    _fail "no process with PID $PID" "pid" 1
+    echo "ERROR: no process with PID $PID" >&2
+    exit 1
   fi
 
   PROC_NAME="$(ps -p "$PID" -o comm= 2>/dev/null | tr -d ' ' || echo '?')"
   if _is_protected "$PROC_NAME"; then
-    _fail "refusing to kill protected process: $PROC_NAME (PID $PID)" "pid" 1
+    echo "ERROR: refusing to kill protected process: $PROC_NAME (PID $PID)" >&2
+    exit 1
   fi
 
-  [[ "$JSON" -eq 0 ]] && echo "Sending SIGTERM to PID $PID ($PROC_NAME)..."
+  echo "Sending SIGTERM to PID $PID ($PROC_NAME)..."
   "$BRIDGE_KILL_CMD" -TERM "$PID"
 
   for i in 1 2 3 4 5 6; do
     sleep 0.5
     if ! "$BRIDGE_KILL_CMD" -0 "$PID" 2>/dev/null; then
-      if [[ "$JSON" -eq 1 ]]; then
-        _json_emit 1 "pid" "$PID" "" "" 0
-      fi
       echo "✓ PID $PID ($PROC_NAME) is gone"
       exit 0
     fi
   done
-  if [[ "$JSON" -eq 1 ]]; then
-    _json_emit 0 "pid" "" "$PID" "PID $PID still alive after 3s — may need SIGKILL" 1
-  fi
   echo "⚠ PID $PID ($PROC_NAME) still alive after 3s — may need SIGKILL" >&2
   exit 1
 fi
@@ -1650,60 +1523,475 @@ fi
 PIDS="$("$BRIDGE_PGREP_CMD" -x "$TARGET" 2>/dev/null || true)"
 
 if [[ -z "$PIDS" ]]; then
-  _fail "no process named '$TARGET' found" "name" 1
+  echo "ERROR: no process named '$TARGET' found" >&2
+  exit 1
 fi
 
 PID_COUNT="$(echo "$PIDS" | wc -l | tr -d ' ')"
 
 if [[ "$PID_COUNT" -gt 1 && "$ALL_FLAG" -eq 0 ]]; then
-  if [[ "$JSON" -eq 1 ]]; then
-    _json_emit 0 "name" "" "$(echo "$PIDS" | tr '\n' ' ')" \
-      "$PID_COUNT processes named '$TARGET' found — pass --all to kill all, or use a specific PID" 1
-  fi
   echo "ERROR: $PID_COUNT processes named '$TARGET' found (PIDs: $(echo "$PIDS" | tr '\n' ' '))" >&2
   echo "  Pass --all to kill all of them, or use a specific PID instead." >&2
   exit 1
 fi
 
-KILLED_PIDS=""
 KILLED=0
 while IFS= read -r pid; do
   [[ -z "$pid" ]] && continue
   if (( pid <= 10 )); then
-    [[ "$JSON" -eq 0 ]] && echo "  skipping PID $pid (≤ 10)" >&2
+    echo "  skipping PID $pid (≤ 10)" >&2
     continue
   fi
-  [[ "$JSON" -eq 0 ]] && echo "Sending SIGTERM to PID $pid ($TARGET)..."
+  echo "Sending SIGTERM to PID $pid ($TARGET)..."
   if "$BRIDGE_KILL_CMD" -TERM "$pid" 2>/dev/null; then
     KILLED=$(( KILLED + 1 ))
-    KILLED_PIDS="$KILLED_PIDS $pid"
   else
-    [[ "$JSON" -eq 0 ]] && echo "  WARNING: could not send SIGTERM to PID $pid" >&2
+    echo "  WARNING: could not send SIGTERM to PID $pid" >&2
   fi
 done <<< "$PIDS"
 
 if [[ "$KILLED" -eq 0 ]]; then
-  _fail "no processes were killed" "name" 1
+  echo "ERROR: no processes were killed" >&2
+  exit 1
 fi
 
 sleep 0.5
-REMAINING_PIDS="$({ "$BRIDGE_PGREP_CMD" -x "$TARGET" 2>/dev/null || true; } | tr '\n' ' ')"
-REMAINING="$(echo "$REMAINING_PIDS" | wc -w | tr -d ' ')"
+REMAINING="$({ "$BRIDGE_PGREP_CMD" -x "$TARGET" 2>/dev/null || true; } | wc -l | tr -d ' ')"
 if [[ "$REMAINING" -eq 0 ]]; then
-  if [[ "$JSON" -eq 1 ]]; then
-    _json_emit 1 "name" "$KILLED_PIDS" "" "" 0
-  fi
   echo "✓ $KILLED '$TARGET' process(es) terminated"
 else
-  if [[ "$JSON" -eq 1 ]]; then
-    _json_emit 0 "name" "$KILLED_PIDS" "$REMAINING_PIDS" \
-      "$REMAINING '$TARGET' process(es) still alive after SIGTERM — may need SIGKILL" 1
-  fi
   echo "⚠ $REMAINING '$TARGET' process(es) still alive after SIGTERM — may need SIGKILL" >&2
   exit 1
 fi
 PK
 chmod +x "$BRIDGE_ROOT/scripts/process_kill.sh"
+
+# ── mcp_proxy.sh ──────────────────────────────────────────────────────────────
+cat > "$BRIDGE_ROOT/scripts/mcp_proxy.sh" <<'MCPPROXY'
+#!/usr/bin/env bash
+# mcp_proxy.sh — relay a single MCP JSON-RPC call to a local stdio MCP server
+# and return the response through the bridge queue.
+#
+# This lets Claude Cowork reach any local stdio MCP server — a database client,
+# filesystem tool, or custom CLI — without a public HTTPS tunnel.
+# Addresses: anthropics/claude-code#53476, anthropics/claude-code#48909
+#
+# Usage
+# -----
+#   mcp_proxy.sh --server <name> --method <method> [--params <json>]
+#   mcp_proxy.sh --server <name> --request <full_jsonrpc_json>
+#
+# Server registry: $BRIDGE_ROOT/mcp_servers.json
+# Register servers with: mcp_register.sh
+#
+# Output (stdout): JSON-RPC response object, always valid JSON.
+# Exit code: always 0 — MCP-level errors are reported inside the JSON.
+#
+# Testability hooks
+#   BRIDGE_MCP_REGISTRY  override registry file path
+set -uo pipefail
+
+BRIDGE_ROOT="${BRIDGE_ROOT:-$HOME/.cowork-to-code-bridge}"
+REGISTRY="${BRIDGE_MCP_REGISTRY:-$BRIDGE_ROOT/mcp_servers.json}"
+
+usage() {
+  cat >&2 <<'EOF'
+Usage:
+  mcp_proxy.sh --server <name> --method <method> [--params <json>]
+  mcp_proxy.sh --server <name> --request <full_jsonrpc_json>
+
+Examples:
+  mcp_proxy.sh --server filesystem --method tools/list --params '{}'
+  mcp_proxy.sh --server postgres   --method tools/call \
+    --params '{"name":"query","arguments":{"sql":"SELECT 1"}}'
+EOF
+  exit 1
+}
+
+SERVER_NAME=""
+METHOD=""
+PARAMS="null"
+REQUEST_JSON=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --server)  SERVER_NAME="$2"; shift 2 ;;
+    --method)  METHOD="$2";      shift 2 ;;
+    --params)  PARAMS="$2";      shift 2 ;;
+    --request) REQUEST_JSON="$2";shift 2 ;;
+    -h|--help) usage ;;
+    *) echo "Unknown argument: $1" >&2; usage ;;
+  esac
+done
+
+[[ -z "$SERVER_NAME" ]] && { echo "ERROR: --server is required" >&2; usage; }
+[[ -z "$METHOD" && -z "$REQUEST_JSON" ]] && { echo "ERROR: --method or --request is required" >&2; usage; }
+
+# ── Python handles the MCP stdio protocol ─────────────────────────────────────
+python3 - \
+  "$SERVER_NAME" \
+  "$METHOD" \
+  "$PARAMS" \
+  "$REQUEST_JSON" \
+  "$REGISTRY" \
+<<'PYEOF'
+import sys, json, subprocess, time, os
+
+server_name  = sys.argv[1]
+method       = sys.argv[2]
+params_raw   = sys.argv[3]
+request_raw  = sys.argv[4]
+registry_path = sys.argv[5]
+
+def die(msg):
+    print(json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": -32000, "message": msg}}))
+    sys.exit(0)
+
+if not os.path.exists(registry_path):
+    die(f"No server registry at {registry_path}. Run mcp_register.sh first.")
+
+try:
+    registry = json.load(open(registry_path))
+except Exception as e:
+    die(f"Cannot read registry: {e}")
+
+if server_name not in registry:
+    known = list(registry.keys())
+    die(f"Server '{server_name}' not registered. Known servers: {known}")
+
+cfg = registry[server_name]
+cmd = [cfg["command"]] + cfg.get("args", [])
+env = {**os.environ, **cfg.get("env", {})}
+
+if request_raw:
+    try:
+        user_req = json.loads(request_raw)
+    except Exception as e:
+        die(f"Invalid --request JSON: {e}")
+else:
+    try:
+        params = json.loads(params_raw)
+    except Exception as e:
+        die(f"Invalid --params JSON: {e}")
+    user_req = {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": method,
+        "params": params if params is not None else {},
+    }
+
+req_id = user_req.get("id", 2)
+
+INIT_REQ = json.dumps({
+    "jsonrpc": "2.0", "id": 1, "method": "initialize",
+    "params": {
+        "protocolVersion": "2024-11-05",
+        "capabilities": {},
+        "clientInfo": {"name": "cowork-bridge-proxy", "version": "1.0"},
+    }
+})
+INIT_NOTIF = json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"})
+
+try:
+    proc = subprocess.Popen(
+        cmd, env=env,
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, bufsize=1,
+    )
+except FileNotFoundError:
+    die(f"Command not found: {cmd[0]}")
+except Exception as e:
+    die(f"Failed to start server '{server_name}': {e}")
+
+def readline_timeout(stream, timeout=10.0):
+    import select
+    deadline = time.time() + timeout
+    buf = ""
+    while time.time() < deadline:
+        ready, _, _ = select.select([stream], [], [], 0.05)
+        if ready:
+            ch = stream.read(1)
+            if not ch:
+                return None
+            if ch == "\n":
+                return buf
+            buf += ch
+    return None
+
+result = None
+try:
+    proc.stdin.write(INIT_REQ + "\n")
+    proc.stdin.flush()
+
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        line = readline_timeout(proc.stdout, timeout=2.0)
+        if line is None:
+            break
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            msg = json.loads(line)
+            if msg.get("id") == 1:
+                if "error" in msg:
+                    result = msg
+                break
+        except Exception:
+            continue
+    else:
+        result = {"jsonrpc": "2.0", "id": req_id,
+                  "error": {"code": -32001, "message": "Initialize timeout"}}
+
+    if result is None:
+        proc.stdin.write(INIT_NOTIF + "\n")
+        proc.stdin.flush()
+        proc.stdin.write(json.dumps(user_req) + "\n")
+        proc.stdin.flush()
+
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            line = readline_timeout(proc.stdout, timeout=2.0)
+            if line is None:
+                result = {"jsonrpc": "2.0", "id": req_id,
+                          "error": {"code": -32002, "message": "Response timeout after 30s"}}
+                break
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+                if "id" in msg and msg["id"] == req_id:
+                    result = msg
+                    break
+            except Exception:
+                continue
+        else:
+            result = {"jsonrpc": "2.0", "id": req_id,
+                      "error": {"code": -32002, "message": "Response timeout after 30s"}}
+
+except Exception as e:
+    result = {"jsonrpc": "2.0", "id": req_id,
+              "error": {"code": -32603, "message": f"Protocol error: {e}"}}
+finally:
+    try:
+        proc.stdin.close()
+        proc.terminate()
+        proc.wait(timeout=3)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+if result is None:
+    result = {"jsonrpc": "2.0", "id": req_id,
+              "error": {"code": -32603, "message": "No response received"}}
+
+print(json.dumps(result))
+PYEOF
+MCPPROXY
+chmod +x "$BRIDGE_ROOT/scripts/mcp_proxy.sh"
+
+# ── mcp_register.sh ───────────────────────────────────────────────────────────
+cat > "$BRIDGE_ROOT/scripts/mcp_register.sh" <<'MCPREG'
+#!/usr/bin/env bash
+# mcp_register.sh — register a local stdio MCP server in the bridge registry.
+#
+# Usage
+# -----
+#   mcp_register.sh --name <name> --command <cmd> [--args <json_array>] [--env <json_object>]
+#   mcp_register.sh --remove <name>
+#   mcp_register.sh --list
+#
+# Examples
+# --------
+#   mcp_register.sh --name filesystem \
+#     --command npx \
+#     --args '["-y","@modelcontextprotocol/server-filesystem","/Users/me/projects"]'
+#
+#   mcp_register.sh --name postgres \
+#     --command uvx \
+#     --args '["mcp-server-postgres","postgresql://localhost/mydb"]'
+#
+# Testability hooks
+#   BRIDGE_MCP_REGISTRY  override registry file path
+set -uo pipefail
+
+BRIDGE_ROOT="${BRIDGE_ROOT:-$HOME/.cowork-to-code-bridge}"
+REGISTRY="${BRIDGE_MCP_REGISTRY:-$BRIDGE_ROOT/mcp_servers.json}"
+
+usage() {
+  cat >&2 <<'EOF'
+Usage:
+  mcp_register.sh --name <name> --command <cmd> [--args <json_array>] [--env <json_object>]
+  mcp_register.sh --remove <name>
+  mcp_register.sh --list
+EOF
+  exit 1
+}
+
+MODE="register"
+NAME=""
+COMMAND=""
+ARGS_JSON="[]"
+ENV_JSON="{}"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --name)    NAME="$2";      shift 2 ;;
+    --command) COMMAND="$2";   shift 2 ;;
+    --args)    ARGS_JSON="$2"; shift 2 ;;
+    --env)     ENV_JSON="$2";  shift 2 ;;
+    --remove)  MODE="remove"; NAME="$2"; shift 2 ;;
+    --list)    MODE="list";   shift ;;
+    -h|--help) usage ;;
+    *) echo "Unknown argument: $1" >&2; usage ;;
+  esac
+done
+
+python3 - "$MODE" "$NAME" "$COMMAND" "$ARGS_JSON" "$ENV_JSON" "$REGISTRY" <<'PYEOF'
+import sys, json, os
+
+mode          = sys.argv[1]
+name          = sys.argv[2]
+command       = sys.argv[3]
+args_raw      = sys.argv[4]
+env_raw       = sys.argv[5]
+registry_path = sys.argv[6]
+
+registry = {}
+if os.path.exists(registry_path):
+    try:
+        registry = json.load(open(registry_path))
+    except Exception as e:
+        print(f"WARNING: could not parse existing registry, starting fresh: {e}", file=sys.stderr)
+
+if mode == "list":
+    if not registry:
+        print("No MCP servers registered.")
+        print(f"Registry: {registry_path}")
+    else:
+        print(f"Registered MCP servers ({len(registry)}):")
+        for n, cfg in registry.items():
+            args_str = " ".join(cfg.get("args", []))
+            print(f"  {n:20s}  {cfg['command']} {args_str}")
+        print(f"\nRegistry: {registry_path}")
+    sys.exit(0)
+
+if mode == "remove":
+    if not name:
+        print("ERROR: --remove requires a server name", file=sys.stderr); sys.exit(1)
+    if name not in registry:
+        print(f"ERROR: '{name}' is not registered", file=sys.stderr); sys.exit(1)
+    del registry[name]
+    os.makedirs(os.path.dirname(registry_path), exist_ok=True)
+    with open(registry_path, "w") as f:
+        json.dump(registry, f, indent=2)
+    print(f"✓ Removed '{name}' from registry")
+    sys.exit(0)
+
+if not name:
+    print("ERROR: --name is required", file=sys.stderr); sys.exit(1)
+if not command:
+    print("ERROR: --command is required", file=sys.stderr); sys.exit(1)
+
+try:
+    args = json.loads(args_raw)
+    if not isinstance(args, list): raise ValueError("--args must be a JSON array")
+except Exception as e:
+    print(f"ERROR: invalid --args JSON: {e}", file=sys.stderr); sys.exit(1)
+
+try:
+    env = json.loads(env_raw)
+    if not isinstance(env, dict): raise ValueError("--env must be a JSON object")
+except Exception as e:
+    print(f"ERROR: invalid --env JSON: {e}", file=sys.stderr); sys.exit(1)
+
+registry[name] = {"command": command, "args": args, "env": env}
+os.makedirs(os.path.dirname(registry_path), exist_ok=True)
+tmp = registry_path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(registry, f, indent=2)
+os.replace(tmp, registry_path)
+
+print(f"✓ Registered '{name}'  →  {command} {' '.join(str(a) for a in args)}")
+print(f"  Registry: {registry_path}  ({len(registry)} server(s))")
+PYEOF
+MCPREG
+chmod +x "$BRIDGE_ROOT/scripts/mcp_register.sh"
+
+# ── mcp_list_servers.sh ───────────────────────────────────────────────────────
+cat > "$BRIDGE_ROOT/scripts/mcp_list_servers.sh" <<'MCPLIST'
+#!/usr/bin/env bash
+# mcp_list_servers.sh — list all MCP servers registered in the bridge registry.
+#
+# Usage: mcp_list_servers.sh [--json]
+#
+# Testability hooks
+#   BRIDGE_MCP_REGISTRY  override registry file path
+set -uo pipefail
+
+BRIDGE_ROOT="${BRIDGE_ROOT:-$HOME/.cowork-to-code-bridge}"
+REGISTRY="${BRIDGE_MCP_REGISTRY:-$BRIDGE_ROOT/mcp_servers.json}"
+JSON_OUT=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --json) JSON_OUT=1; shift ;;
+    -h|--help) echo "Usage: mcp_list_servers.sh [--json]" >&2; exit 0 ;;
+    *) echo "Unknown argument: $1" >&2; exit 1 ;;
+  esac
+done
+
+if [[ ! -f "$REGISTRY" ]]; then
+  if [[ "$JSON_OUT" -eq 1 ]]; then
+    echo '{"servers":{},"count":0,"registry":null}'
+  else
+    echo "No MCP servers registered."
+    echo "Register one with: mcp_register.sh --name <name> --command <cmd>"
+  fi
+  exit 0
+fi
+
+python3 - "$REGISTRY" "$JSON_OUT" <<'PYEOF'
+import sys, json
+
+registry_path = sys.argv[1]
+json_out      = sys.argv[2] == "1"
+
+try:
+    registry = json.load(open(registry_path))
+except Exception as e:
+    if json_out:
+        print(json.dumps({"error": str(e), "servers": {}, "count": 0}))
+    else:
+        print(f"ERROR reading registry: {e}")
+    sys.exit(0)
+
+if json_out:
+    print(json.dumps({"servers": registry, "count": len(registry),
+                      "registry": registry_path}, indent=2))
+    sys.exit(0)
+
+if not registry:
+    print("No MCP servers registered.")
+    print(f"Registry: {registry_path}")
+    sys.exit(0)
+
+print(f"Registered MCP servers ({len(registry)}):\n")
+print(f"  {'NAME':<20}  {'COMMAND':<12}  ARGS")
+print(f"  {'-'*20}  {'-'*12}  {'-'*30}")
+for name, cfg in sorted(registry.items()):
+    args_str = " ".join(str(a) for a in cfg.get("args", []))
+    if len(args_str) > 40:
+        args_str = args_str[:37] + "..."
+    print(f"  {name:<20}  {cfg['command']:<12}  {args_str}")
+print(f"\nRegistry: {registry_path}")
+PYEOF
+MCPLIST
+chmod +x "$BRIDGE_ROOT/scripts/mcp_list_servers.sh"
+
 
 # mcp_audit.sh — cross-surface MCP audit.
 # Addresses: anthropics/claude-code#56353 — no first-class tool to compare
@@ -1796,7 +2084,7 @@ MCPAUDIT
 chmod +x "$BRIDGE_ROOT/scripts/mcp_audit.sh"
 
 
-c_green "  ✓ scripts installed: ping, hello, run_claude, mac_health, mac_ram, mac_disk, mac_top, mac_network, port_check, docker_ps, docker_logs, pkg_outdated, git_status, list_scripts, env_check, disk_hogs, open_browser, request_cowork, process_kill, mcp_audit"
+c_green "  ✓ scripts installed: ping, hello, run_claude, mac_health, mac_ram, mac_disk, mac_top, mac_network, port_check, docker_ps, docker_logs, pkg_outdated, git_status, list_scripts, env_check, disk_hogs, open_browser, request_cowork, process_kill, mcp_proxy, mcp_register, mcp_list_servers, mcp_audit"
 
 # ─── 5b. Fetch the single-file Cowork client (one source of truth) ───────────
 # bridge_client.py is the EXACT file the Cowork sandbox imports. To avoid drift,
@@ -1877,40 +2165,7 @@ Pass \`max_budget_usd=2.00\` to stop the agent when that amount is spent.
 The owner can set \`BRIDGE_MAX_BUDGET_USD\` as a global ceiling that can never
 be exceeded regardless of what Cowork sends (effective = min(caller, owner)).
 
-## Step 3 — streaming + interactive tasks
-
-For long tasks use \`call_remote_streaming\`. Add \`interactive=True\` to handle
-mid-task questions from the script (approval gates, config requests, decision points).
-
-\`\`\`python
-from bridge_client import call_remote_streaming, reply_to_machine, resume_remote
-
-r = call_remote_streaming("scripts/run_claude.sh",
-    args=["Deploy to prod", "/path/to/repo"],
-    timeout=900, interactive=True)
-
-while r.get("state") == "awaiting_reply":
-    # Script paused and asked a question — show it to the user, get answer.
-    answer = input(f"Script asks: {r['question']} > ")
-    reply_to_machine(r["request_id"], answer, bridge_root=r["_bridge_root"])
-    r = resume_remote(r["cmd_id"], r["_deadline"], bridge_root=r["_bridge_root"])
-
-print(r["exit_code"], r["stdout"])
-\`\`\`
-
-Return shape when a question arrives:
-\`\`\`json
-{"state": "awaiting_reply", "cmd_id": "...", "request_id": "...",
- "question": "Deploy to production?", "from": "claude-code",
- "_deadline": 1234567890.0, "_bridge_root": "/Users/.../.cowork-to-code-bridge"}
-\`\`\`
-
-On the script side, \`request_cowork.sh "question" --wait 120\` blocks until Cowork
-replies or times out. Timeout exits 1 (not 0) — scripts can detect and handle it.
-Set a generous \`timeout=\` for interactive tasks; the clock doesn't pause while
-waiting for an answer.
-
-## Step 4 — quick system checks (no agent)
+## Step 3 — quick system checks (no agent)
 \`call_remote("scripts/mac_health.sh")\` · \`mac_ram.sh\` · \`mac_disk.sh\` · \`mac_top.sh\` · \`mac_network.sh\` · \`port_check.sh\` · \`docker_ps.sh\` · \`docker_logs.sh\` · \`pkg_outdated.sh\` · \`git_status.sh <path>\`
 
 ## Results
@@ -2290,16 +2545,4 @@ User scripts dir:    $USER_SCRIPTS_DIR
 Uninstall (one command — undoes everything this installer did):
   $USER_SCRIPTS_DIR/cowork-to-code-bridge-uninstall
 
-Or, if $USER_SCRIPTS_DIR is on your PATH:
-  cowork-to-code-bridge-uninstall
-
-Non-interactively:
-  cowork-to-code-bridge-uninstall --yes
-
-If neither path is available:
-  curl -fsSL https://raw.githubusercontent.com/$REPO/main/daemon/uninstall.sh | bash
-
-$(c_yellow "⭐ If this saved you time, a star on GitHub helps others find it:")
-  https://github.com/$REPO
-
-DONE
+Or, if $USER_SCRIPTS_DIR is on

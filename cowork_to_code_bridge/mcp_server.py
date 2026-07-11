@@ -1,710 +1,382 @@
 """
-mcp_server.py — MCP (Model Context Protocol) server that exposes the bridge
-as a model provider. Hermes, Open Claw, and other agents can connect to this
-server and escalate work to Claude Code without needing a subscription directly.
+mcp_server.py — stdio MCP server for cowork-to-code-bridge.
+
+Exposes the bridge as an MCP tool server so any MCP-compatible agent
+(Hermes, OpenClaw, Claude Desktop, etc.) can call:
+
+  • escalate_to_claude  — submit a task/question to the Claude Code agent
+  • call_remote         — run any whitelisted script via the bridge
+  • daemon_alive        — health-check the daemon
+  • call_mcp_tool       — proxy a call to a registered stdio MCP server
+
+Zero external dependencies (stdlib only).  Speaks JSON-RPC 2.0 over stdio
+exactly as the MCP spec requires.
 
 Usage:
-  cowork-to-code-bridge-mcp --stdio
+    cowork-to-code-bridge-mcp --stdio
+    python -m cowork_to_code_bridge.mcp_server --stdio
 
-The MCP server runs in stdin/stdout mode (JSONRPC 2.0) and provides:
-  - Tool: escalate_to_claude — hand a request to Claude Code, get a reply
-  - Tool: list_bridge_scripts — discover available whitelisted scripts
-  - Tool: run_script — execute a whitelisted script directly (no agent)
-
-A Hermes/Open Claw agent can discover these tools via MCP and call them.
-Requests are escalated to Claude Code via the bridge (async queue).
+Hermes config (examples/hermes-mcp-config.json):
+    {
+      "mcpServers": {
+        "cowork": {
+          "command": "cowork-to-code-bridge-mcp",
+          "args": ["--stdio"]
+        }
+      }
+    }
 """
 from __future__ import annotations
 
-import argparse
 import json
-import os
 import sys
-import time
-import uuid
-from pathlib import Path
+import traceback
 from typing import Any
 
-from cowork_to_code_bridge.client import call_remote_streaming
+from cowork_to_code_bridge.client import (
+    call_mcp_tool as _call_mcp_tool,
+)
+from cowork_to_code_bridge.client import (
+    call_remote as _call_remote,
+)
+from cowork_to_code_bridge.client import (
+    daemon_alive as _daemon_alive,
+)
 
+__version__ = "0.5.1"
+PROTOCOL_VERSION = "2024-11-05"
 
-class MCPServer:
-    """MCP server wrapping the bridge as a model provider."""
+# ---------------------------------------------------------------------------
+# Tool definitions (MCP inputSchema format)
+# ---------------------------------------------------------------------------
 
-    def __init__(self, bridge_root: Path | str | None = None):
-        """Initialize MCP server with bridge connection."""
-        if isinstance(bridge_root, str):
-            bridge_root = Path(bridge_root)
-        self.bridge_root = bridge_root or self._resolve_bridge_root()
-        self.request_id_counter = 0
-        self.quota_limit_daily = 100  # Operations per day
-        self.quota_reset_hour = 0  # Reset at midnight UTC
-        self.session_cache_mode = False  # Fresh context per call (vs persistent agent)
-        self.tools = {
-            "escalate_to_claude": {
-                "description": "Hand a task to Claude Code on your machine. "
-                "Request is written to the bridge inbox; Claude Code agent picks it up, "
-                "debugs/fixes, writes reply. Returns result when available.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "request": {
-                            "type": "string",
-                            "description": "The task description for Claude Code "
-                            "(e.g., 'Debug the API health check failure and fix it')",
-                        },
-                        "wait_seconds": {
-                            "type": "integer",
-                            "description": "Max seconds to wait for reply (default: 300)",
-                            "default": 300,
-                        },
-                    },
-                    "required": ["request"],
+TOOLS: list[dict[str, Any]] = [
+    {
+        "name": "escalate_to_claude",
+        "description": (
+            "Submit a task or question to the Claude Code agent running on your computer "
+            "via the cowork-to-code-bridge daemon.  The agent runs the task in a local "
+            "environment with full file/shell access, then returns stdout, stderr, and "
+            "exit_code.  Use this to delegate debugging, coding, or file-system work to "
+            "your local Claude Code instance."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task": {
+                    "type": "string",
+                    "description": (
+                        "The task or question for Claude Code.  Be specific — include "
+                        "repo paths, error messages, or exact filenames where relevant."
+                    ),
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": "Working directory on the host machine (optional).",
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Timeout in seconds.  Default: 300.",
+                    "default": 300,
+                },
+                "max_budget_usd": {
+                    "type": "number",
+                    "description": "Per-task spend ceiling for run_claude.sh (optional).",
+                },
+                "plan": {
+                    "type": "string",
+                    "description": (
+                        "Plain-English description of what the task will do.  "
+                        "Shown to the human if approve_plan.sh is installed."
+                    ),
                 },
             },
-            "run_script": {
-                "description": "Execute a whitelisted script directly on the bridge. "
-                "No agent involved; returns result immediately.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "script": {
-                            "type": "string",
-                            "description": "Script path relative to scripts/ "
-                            "(e.g., 'mac_health.sh', 'disk_hogs.sh')",
-                        },
-                        "args": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Arguments to pass to the script",
-                            "default": [],
-                        },
-                        "timeout": {
-                            "type": "integer",
-                            "description": "Max seconds for script to run (default: 60)",
-                            "default": 60,
-                        },
-                    },
-                    "required": ["script"],
+            "required": ["task"],
+        },
+    },
+    {
+        "name": "call_remote",
+        "description": (
+            "Run any whitelisted script on the host machine via the bridge daemon and "
+            "return its result.  The script must be in the daemon's allowed-scripts "
+            "directory (typically ~/.cowork-to-code-bridge/scripts/)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "script": {
+                    "type": "string",
+                    "description": "Relative path to the script, e.g. 'scripts/ping.sh'.",
+                },
+                "args": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Positional arguments for the script.",
+                    "default": [],
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Timeout in seconds.  Default: 60.",
+                    "default": 60,
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": "Working directory on the host machine (optional).",
+                },
+                "idempotency_key": {
+                    "type": "string",
+                    "description": "Stable key for safe retries — same key returns cached result.",
                 },
             },
-            "list_bridge_scripts": {
-                "description": "Discover available whitelisted scripts on the bridge. "
-                "Returns name, description for each script.",
-                "inputSchema": {"type": "object", "properties": {}, "required": []},
-            },
-            "get_operation_status": {
-                "description": "Check status of a long-running escalation operation. "
-                "Idempotent: multiple calls return same result.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "operation_id": {
-                            "type": "string",
-                            "description": "Operation ID returned by escalate_to_claude",
-                        },
-                    },
-                    "required": ["operation_id"],
+            "required": ["script"],
+        },
+    },
+    {
+        "name": "daemon_alive",
+        "description": (
+            "Return true if the cowork-to-code-bridge daemon is reachable on the host "
+            "machine, false otherwise.  Use this as a health-check before submitting work."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "ping_timeout": {
+                    "type": "integer",
+                    "description": "Seconds to wait for a ping response.  Default: 10.",
+                    "default": 10,
                 },
             },
-            "cancel_operation": {
-                "description": "Cancel a running operation. "
-                "Safe before execution (immediate), best-effort during execution (SIGTERM).",
-                "inputSchema": {
+            "required": [],
+        },
+    },
+    {
+        "name": "call_mcp_tool",
+        "description": (
+            "Proxy a JSON-RPC call to a stdio MCP server registered on the host machine "
+            "via mcp_register.sh.  Useful for reaching local MCP servers (e.g. filesystem, "
+            "postgres) that only exist on the host."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "server": {
+                    "type": "string",
+                    "description": "Name of the registered MCP server (e.g. 'filesystem').",
+                },
+                "method": {
+                    "type": "string",
+                    "description": "MCP JSON-RPC method (e.g. 'tools/list', 'tools/call').",
+                },
+                "params": {
                     "type": "object",
-                    "properties": {
-                        "operation_id": {
-                            "type": "string",
-                            "description": "Operation ID to cancel",
-                        },
-                        "reason": {
-                            "type": "string",
-                            "description": "Reason for cancellation (logged)",
-                            "default": "Caller requested",
-                        },
-                    },
-                    "required": ["operation_id"],
+                    "description": "Method parameters (optional).",
                 },
             },
-        }
+            "required": ["server", "method"],
+        },
+    },
+]
 
-    def _resolve_bridge_root(self) -> Path:
-        """Find the bridge directory (same logic as client.py)."""
-        env = os.environ.get("BRIDGE_ROOT")
-        if env:
-            return Path(env)
-        cwd_bridge = Path.cwd() / "bridge"
-        if cwd_bridge.exists():
-            return cwd_bridge
-        return Path.home() / ".cowork-to-code-bridge"
+# ---------------------------------------------------------------------------
+# Tool handlers
+# ---------------------------------------------------------------------------
 
-    def handle_request(self, req: dict[str, Any]) -> dict[str, Any]:
-        """Handle a JSON-RPC request."""
-        method = req.get("method")
-        params = req.get("params", {})
-        req_id = req.get("id")
 
-        try:
-            if method == "initialize":
-                result = self._handle_initialize(params)
-            elif method == "tools/list":
-                result = self._handle_tools_list(params)
-            elif method == "tools/call":
-                result = self._handle_tools_call(params)
-            else:
-                return self._error_response(
-                    req_id, -32601, f"Method not found: {method}"
+def _handle_escalate_to_claude(args: dict[str, Any]) -> dict[str, Any]:
+    task = args["task"]
+    timeout = int(args.get("timeout", 300))
+    cwd = args.get("cwd")
+    max_budget_usd = args.get("max_budget_usd")
+    plan = args.get("plan")
+
+    result = _call_remote(
+        script="scripts/run_claude.sh",
+        args=[task],
+        timeout=timeout,
+        cwd=cwd,
+        plan=plan,
+        max_budget_usd=max_budget_usd,
+    )
+    return result
+
+
+def _handle_call_remote(args: dict[str, Any]) -> dict[str, Any]:
+    return _call_remote(
+        script=args["script"],
+        args=args.get("args", []),
+        timeout=int(args.get("timeout", 60)),
+        cwd=args.get("cwd"),
+        idempotency_key=args.get("idempotency_key"),
+    )
+
+
+def _handle_daemon_alive(args: dict[str, Any]) -> dict[str, Any]:
+    alive = _daemon_alive(ping_timeout=int(args.get("ping_timeout", 10)))
+    return {"alive": alive}
+
+
+def _handle_call_mcp_tool(args: dict[str, Any]) -> dict[str, Any]:
+    return _call_mcp_tool(
+        server=args["server"],
+        method=args["method"],
+        params=args.get("params"),
+    )
+
+
+_HANDLERS = {
+    "escalate_to_claude": _handle_escalate_to_claude,
+    "call_remote": _handle_call_remote,
+    "daemon_alive": _handle_daemon_alive,
+    "call_mcp_tool": _handle_call_mcp_tool,
+}
+
+# ---------------------------------------------------------------------------
+# JSON-RPC 2.0 / MCP protocol helpers
+# ---------------------------------------------------------------------------
+
+
+def _send(msg: dict[str, Any]) -> None:
+    """Write a JSON-RPC message to stdout (one line, newline-terminated)."""
+    sys.stdout.write(json.dumps(msg) + "\n")
+    sys.stdout.flush()
+
+
+def _ok(req_id: Any, result: Any) -> None:
+    _send({"jsonrpc": "2.0", "id": req_id, "result": result})
+
+
+def _err(req_id: Any, code: int, message: str, data: Any = None) -> None:
+    err: dict[str, Any] = {"code": code, "message": message}
+    if data is not None:
+        err["data"] = data
+    _send({"jsonrpc": "2.0", "id": req_id, "error": err})
+
+
+# ---------------------------------------------------------------------------
+# Request dispatcher
+# ---------------------------------------------------------------------------
+
+
+def _dispatch(req: dict[str, Any]) -> None:
+    method = req.get("method", "")
+    req_id = req.get("id")  # None for notifications
+    params = req.get("params") or {}
+
+    # Notifications (no id) — just ack silently
+    if req_id is None:
+        return
+
+    try:
+        if method == "initialize":
+            _ok(
+                req_id,
+                {
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {
+                        "name": "cowork-to-code-bridge",
+                        "version": __version__,
+                    },
+                },
+            )
+
+        elif method == "tools/list":
+            _ok(req_id, {"tools": TOOLS})
+
+        elif method == "tools/call":
+            name = params.get("name", "")
+            arguments = params.get("arguments") or {}
+
+            if name not in _HANDLERS:
+                _err(req_id, -32601, f"Unknown tool: {name!r}")
+                return
+
+            try:
+                result = _HANDLERS[name](arguments)
+                # MCP tools/call returns content array
+                content_text = json.dumps(result, indent=2)
+                _ok(
+                    req_id,
+                    {
+                        "content": [{"type": "text", "text": content_text}],
+                        "isError": False,
+                    },
                 )
-            return self._success_response(req_id, result)
-        except Exception as e:
-            return self._error_response(req_id, -32603, str(e))
+            except TimeoutError as exc:
+                _ok(
+                    req_id,
+                    {
+                        "content": [{"type": "text", "text": f"TimeoutError: {exc}"}],
+                        "isError": True,
+                    },
+                )
+            except Exception as exc:
+                tb = traceback.format_exc()
+                _ok(
+                    req_id,
+                    {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": f"Error calling {name!r}: {exc}\n{tb}",
+                            }
+                        ],
+                        "isError": True,
+                    },
+                )
 
-    def _handle_initialize(self, params: dict[str, Any]) -> dict[str, Any]:
-        """MCP initialize."""
-        return {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "serverInfo": {
-                "name": "cowork-to-code-bridge",
-                "version": "0.5.1",
-            },
-        }
+        elif method == "ping":
+            _ok(req_id, {})
 
-    def _handle_tools_list(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Return list of available tools."""
-        return {
-            "tools": [
-                {
-                    "name": name,
-                    "description": tool["description"],
-                    "inputSchema": tool["inputSchema"],
-                }
-                for name, tool in self.tools.items()
-            ]
-        }
-
-    def _handle_tools_call(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Execute a tool call."""
-        tool_name = params.get("name")
-        tool_input = params.get("arguments", {})
-
-        if tool_name == "escalate_to_claude":
-            return self._tool_escalate(tool_input)
-        elif tool_name == "run_script":
-            return self._tool_run_script(tool_input)
-        elif tool_name == "list_bridge_scripts":
-            return self._tool_list_scripts(tool_input)
-        elif tool_name == "get_operation_status":
-            return self._tool_get_status(tool_input)
-        elif tool_name == "cancel_operation":
-            return self._tool_cancel(tool_input)
         else:
-            raise ValueError(f"Unknown tool: {tool_name}")
+            _err(req_id, -32601, f"Method not found: {method!r}")
 
-    def _get_quota(self) -> dict[str, Any]:
-        """Calculate remaining quota based on journal."""
-        journal_file = self.bridge_root / "daemon.log"
-        if not journal_file.exists():
-            return {
-                "used": 0,
-                "remaining": self.quota_limit_daily,
-                "reset_at": self._next_reset_time(),
-                "limit": self.quota_limit_daily,
-            }
+    except Exception as exc:
+        _err(req_id, -32603, f"Internal error: {exc}", traceback.format_exc())
 
-        # Count operations in journal for today
-        import datetime
-        today_start = datetime.datetime.now(datetime.timezone.utc).replace(
-            hour=self.quota_reset_hour, minute=0, second=0, microsecond=0
+
+# ---------------------------------------------------------------------------
+# Main loop
+# ---------------------------------------------------------------------------
+
+
+def run_stdio() -> None:
+    """Read JSON-RPC messages from stdin (one per line) and dispatch them."""
+    print(  # noqa: T201  (informational stderr only)
+        f"cowork-to-code-bridge MCP server v{__version__} ready (stdio)",
+        file=sys.stderr,
+    )
+
+    for raw_line in sys.stdin:
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError as exc:
+            _err(None, -32700, f"Parse error: {exc}")
+            continue
+
+        if not isinstance(msg, dict):
+            _err(None, -32600, "Invalid Request: not an object")
+            continue
+
+        _dispatch(msg)
+
+
+def main() -> None:
+    if "--stdio" not in sys.argv and len(sys.argv) < 2:
+        print(
+            "Usage: cowork-to-code-bridge-mcp --stdio\n\n"
+            "Starts the MCP server in stdio mode for use with Hermes, OpenClaw,\n"
+            "Claude Desktop, or any MCP-compatible client.\n\n"
+            "Tools exposed:\n"
+            + "\n".join(f"  • {t['name']}" for t in TOOLS),
+            file=sys.stderr,
         )
-        if datetime.datetime.now(datetime.timezone.utc).hour < self.quota_reset_hour:
-            today_start -= datetime.timedelta(days=1)
-
-        today_ts = today_start.timestamp()
-        count = 0
-        try:
-            for line in journal_file.read_text().splitlines():
-                if not line.strip():
-                    continue
-                try:
-                    entry = json.loads(line)
-                    if entry.get("ts", 0) >= today_ts:
-                        count += 1
-                except json.JSONDecodeError:
-                    pass
-        except Exception:
-            pass
-
-        return {
-            "used": count,
-            "remaining": max(0, self.quota_limit_daily - count),
-            "reset_at": self._next_reset_time(),
-            "limit": self.quota_limit_daily,
-        }
-
-    def _next_reset_time(self) -> str:
-        """Return ISO timestamp for next quota reset."""
-        import datetime
-        now = datetime.datetime.now(datetime.timezone.utc)
-        reset = now.replace(hour=self.quota_reset_hour, minute=0, second=0, microsecond=0)
-        if reset <= now:
-            reset += datetime.timedelta(days=1)
-        return reset.isoformat()
-
-    def _tool_escalate(self, args: dict[str, Any]) -> dict[str, Any]:
-        """Tool: escalate_to_claude."""
-        request = args.get("request", "")
-        wait_seconds = args.get("wait_seconds", 300)
-
-        if not request:
-            raise ValueError("request is required")
-
-        # Write escalation to inbox with MCP metadata
-        inbox = self.bridge_root / "to_cowork"
-        inbox.mkdir(parents=True, exist_ok=True)
-        request_id = f"{int(time.time())}_{uuid.uuid4().hex[:8]}"
-
-        payload = {
-            "id": request_id,
-            "request": request,
-            "ts": time.time(),
-            "from": "mcp-client",
-            "escalation_context": {
-                "source": "mcp-server",
-                "hostname": os.uname().nodename,
-                "user": os.getenv("USER", "unknown"),
-            },
-        }
-
-        request_file = inbox / f"{request_id}.json"
-        tmp = request_file.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(payload))
-        tmp.rename(request_file)
-
-        # Initialize operation state with metrics tracking
-        ops_dir = self.bridge_root / "operations"
-        ops_dir.mkdir(parents=True, exist_ok=True)
-        op_file = ops_dir / f"{request_id}.json"
-        op_state = {
-            "operation_id": request_id,
-            "status": "queued",
-            "created_at": time.time(),
-            "updated_at": time.time(),
-            "request": request,
-            "metrics": {
-                "tool_calls": 0,
-                "tool_call_log": [],
-                "api_spend_estimate": 0.0,
-                "memory_mb": 0,
-                "cpu_percent": 0,
-            },
-            # Resume receipt scaffolding. sub_steps tracks execution phases
-            # (e.g. "generating", "testing", "debugging"); artifacts tracks
-            # files/code produced. Both start empty and are populated by the
-            # executing agent. See docs/STATEFUL_OPERATION_PATTERN.md §5.
-            "resume_receipt": {
-                "checkpoint_id": None,
-                "context": {},
-                "sub_steps": [],
-                "artifacts": [],
-                "can_resume": False,
-                "resume_from": None,
-            },
-        }
-        op_file.write_text(json.dumps(op_state))
-
-        # Poll for reply
-        replies = self.bridge_root / "cowork_results"
-        replies.mkdir(parents=True, exist_ok=True)
-        reply_file = replies / f"{request_id}.json"
-        deadline = time.time() + wait_seconds
-
-        quota_before = self._get_quota()
-
-        while time.time() < deadline:
-            if reply_file.exists():
-                try:
-                    reply = json.loads(reply_file.read_text())
-                    quota_after = self._get_quota()
-                    return {
-                        "status": "completed",
-                        "operation_id": request_id,
-                        "result": reply,
-                        "quota": quota_after,
-                    }
-                except json.JSONDecodeError:
-                    time.sleep(0.5)
-                    continue
-            time.sleep(1)
-
-        return {
-            "status": "timeout",
-            "operation_id": request_id,
-            "message": f"No reply within {wait_seconds}s. "
-            "Claude Code (Cowork) may not be open. "
-            f"Request queued at {request_file}.",
-            "quota": quota_before,
-        }
-
-    def _tool_run_script(self, args: dict[str, Any]) -> dict[str, Any]:
-        """Tool: run_script — execute directly, no agent."""
-        script = args.get("script", "")
-        script_args = args.get("args", [])
-        timeout = args.get("timeout", 60)
-
-        if not script:
-            raise ValueError("script is required")
-
-        # Fail fast on a missing script rather than dispatching and waiting
-        # for a reply that will never come (which would surface as a timeout).
-        script_path = self.bridge_root / "scripts" / script
-        if not script_path.exists():
-            return {
-                "status": "error",
-                "message": f"script not found: scripts/{script}",
-            }
-
-        try:
-            result = call_remote_streaming(
-                script=f"scripts/{script}",
-                args=script_args,
-                timeout=timeout,
-                bridge_root=self.bridge_root,
-            )
-            return {
-                "status": "completed",
-                "exit_code": result.get("exit_code"),
-                "stdout": result.get("stdout", ""),
-                "stderr": result.get("stderr", ""),
-            }
-        except TimeoutError as e:
-            return {"status": "timeout", "message": str(e)}
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
-
-    def _tool_list_scripts(self, args: dict[str, Any]) -> dict[str, Any]:
-        """Tool: list_bridge_scripts."""
-        scripts_dir = self.bridge_root / "scripts"
-        if not scripts_dir.exists():
-            return {"scripts": [], "message": "No scripts directory found"}
-
-        scripts = []
-        for script_file in sorted(scripts_dir.glob("*.sh")):
-            name = script_file.name
-            try:
-                content = script_file.read_text(errors="ignore")
-                # Extract first comment line as description
-                for line in content.split("\n"):
-                    if "#" in line:
-                        desc = line.split("#", 1)[1].strip()
-                        if desc and len(desc) > 5:
-                            scripts.append({"name": name, "description": desc})
-                            break
-                if not any(s["name"] == name for s in scripts):
-                    scripts.append({"name": name, "description": "(no description)"})
-            except Exception:
-                scripts.append({"name": name, "description": "(error reading)"})
-
-        return {"scripts": scripts}
-
-    def _extract_metrics(self, op_state: dict[str, Any]) -> dict[str, Any]:
-        """Extract metrics from operation state, including loop detection."""
-        metrics = op_state.get("metrics", {})
-
-        # Calculate derived metrics
-        tool_calls = metrics.get("tool_calls", 0)
-        tool_call_log = metrics.get("tool_call_log", [])
-
-        # Loop detection: find repeated tools with same args
-        repeated_calls = {}
-        if tool_call_log:
-            call_counts = {}
-            for call in tool_call_log:
-                key = (call.get("tool"), json.dumps(call.get("args", {}), sort_keys=True))
-                count = call_counts.get(key, 0) + 1
-                call_counts[key] = count
-                if count >= 3:
-                    tool_name = call.get("tool", "unknown")
-                    repeated_calls[tool_name] = count
-
-        # Estimate API spend (simplified: 3 calls per operation at ~$0.02 each)
-        api_spend_estimate = metrics.get("api_spend_estimate", tool_calls * 0.0067)
-
-        return {
-            "tool_calls": tool_calls,
-            "api_spend_estimate": round(api_spend_estimate, 4),
-            "memory_mb": metrics.get("memory_mb", 0),
-            "cpu_percent": metrics.get("cpu_percent", 0),
-            "repeated_calls": repeated_calls if repeated_calls else None,
-        }
-
-    def _build_resume_receipt(self, op_state: dict[str, Any]) -> dict[str, Any]:
-        """Return a complete resume_receipt for an operation state.
-
-        Backward-compatible: operation state files written before sub_steps /
-        artifacts existed are upgraded on read by filling in the missing fields
-        with their empty defaults. The on-disk file is not mutated (polling is
-        read-only / idempotent); the receipt is normalized in the response only.
-
-        Receipt shape:
-          checkpoint_id : str | None   — opaque id of the latest checkpoint
-          context       : dict         — free-form resume context
-          sub_steps     : list[dict]   — execution phases, each:
-              {name, status, duration_ms, checkpoint_data}
-              status in {"started", "completed", "failed"}
-          artifacts     : list[dict]   — files/code produced, each:
-              {path, type, size_bytes, timestamp}
-          can_resume    : bool         — whether resume_from is actionable
-          resume_from   : str | None   — sub_step name to resume at
-        """
-        receipt = dict(op_state.get("resume_receipt") or {})
-        receipt.setdefault("checkpoint_id", None)
-        receipt.setdefault("context", {})
-        receipt.setdefault("sub_steps", [])
-        receipt.setdefault("artifacts", [])
-        # Normalize each sub_step so every field is present for consumers.
-        normalized_steps = []
-        for step in receipt.get("sub_steps") or []:
-            normalized_steps.append(
-                {
-                    "name": step.get("name"),
-                    "status": step.get("status"),
-                    "duration_ms": step.get("duration_ms"),
-                    "checkpoint_data": step.get("checkpoint_data", {}),
-                }
-            )
-        receipt["sub_steps"] = normalized_steps
-        # Normalize each artifact. The canonical field is `size_bytes`; older
-        # state files used `size`, so fall back to it for backward compatibility.
-        normalized_artifacts = []
-        for art in receipt.get("artifacts") or []:
-            size_bytes = art.get("size_bytes")
-            if size_bytes is None:
-                size_bytes = art.get("size")
-            normalized_artifacts.append(
-                {
-                    "path": art.get("path"),
-                    "type": art.get("type"),
-                    "size_bytes": size_bytes,
-                    "timestamp": art.get("timestamp"),
-                }
-            )
-        receipt["artifacts"] = normalized_artifacts
-        receipt.setdefault("can_resume", False)
-        receipt.setdefault("resume_from", None)
-        return receipt
-
-    def _tool_get_status(self, args: dict[str, Any]) -> dict[str, Any]:
-        """Tool: get_operation_status — check status of escalation operation."""
-        operation_id = args.get("operation_id", "")
-        if not operation_id:
-            raise ValueError("operation_id is required")
-
-        # Check if result file exists (cached result)
-        results_dir = self.bridge_root / "cowork_results"
-        result_file = results_dir / f"{operation_id}.json"
-
-        if result_file.exists():
-            try:
-                result = json.loads(result_file.read_text())
-                return {
-                    "operation_id": operation_id,
-                    "status": "completed",
-                    "result": result,
-                    "quota": self._get_quota(),
-                }
-            except json.JSONDecodeError:
-                pass
-
-        # Check if request is still in queue
-        queue_dir = self.bridge_root / "to_cowork"
-        request_file = queue_dir / f"{operation_id}.json"
-        if request_file.exists():
-            return {
-                "operation_id": operation_id,
-                "status": "queued",
-                "quota": self._get_quota(),
-            }
-
-        # Check operation state (executing or paused)
-        ops_dir = self.bridge_root / "operations"
-        op_file = ops_dir / f"{operation_id}.json"
-        if op_file.exists():
-            try:
-                op_state = json.loads(op_file.read_text())
-                response = {
-                    "operation_id": operation_id,
-                    "status": op_state.get("status", "executing"),
-                    "progress": op_state.get("progress"),
-                    # Always return a complete, normalized resume_receipt so
-                    # callers can rely on sub_steps/artifacts being present.
-                    "resume_receipt": self._build_resume_receipt(op_state),
-                    "quota": self._get_quota(),
-                }
-
-                # Include metrics if available (for loop detection + resource tracking)
-                if "metrics" in op_state or "tool_call_log" in op_state:
-                    metrics = self._extract_metrics(op_state)
-                    response["metrics"] = metrics
-
-                return response
-            except json.JSONDecodeError:
-                pass
-
-        # Unknown operation
-        return {
-            "operation_id": operation_id,
-            "status": "unknown",
-            "message": "Operation not found",
-            "quota": self._get_quota(),
-        }
-
-    def _tool_cancel(self, args: dict[str, Any]) -> dict[str, Any]:
-        """Tool: cancel_operation — cancel a running operation."""
-        operation_id = args.get("operation_id", "")
-        reason = args.get("reason", "Caller requested")
-
-        if not operation_id:
-            raise ValueError("operation_id is required")
-
-        queue_dir = self.bridge_root / "to_cowork"
-        request_file = queue_dir / f"{operation_id}.json"
-
-        # If request still in queue, delete it (safe cancellation)
-        if request_file.exists():
-            try:
-                request_file.unlink()
-                return {
-                    "operation_id": operation_id,
-                    "status": "cancelled",
-                    "reason": reason,
-                    "message": "Operation cancelled before execution started",
-                    "quota": self._get_quota(),
-                }
-            except Exception as e:
-                return {
-                    "operation_id": operation_id,
-                    "status": "error",
-                    "message": f"Failed to cancel: {str(e)}",
-                }
-
-        # If result already exists, it's too late to cancel
-        results_dir = self.bridge_root / "cowork_results"
-        result_file = results_dir / f"{operation_id}.json"
-        if result_file.exists():
-            return {
-                "operation_id": operation_id,
-                "status": "completed",
-                "message": "Operation already completed; cancellation is no-op",
-                "quota": self._get_quota(),
-            }
-
-        # If operation in progress, best-effort: mark it for cancellation
-        # (actual SIGTERM would be handled by daemon)
-        ops_dir = self.bridge_root / "operations"
-        op_file = ops_dir / f"{operation_id}.json"
-        if op_file.exists():
-            try:
-                op_state = json.loads(op_file.read_text())
-                op_state["cancelled"] = True
-                op_state["cancel_reason"] = reason
-                op_state["cancelled_at"] = time.time()
-                op_file.write_text(json.dumps(op_state))
-                return {
-                    "operation_id": operation_id,
-                    "status": "cancelling",
-                    "reason": reason,
-                    "message": "Cancellation signaled (SIGTERM sent to process)",
-                    "quota": self._get_quota(),
-                }
-            except Exception as e:
-                return {
-                    "operation_id": operation_id,
-                    "status": "error",
-                    "message": f"Failed to signal cancellation: {str(e)}",
-                }
-
-        # Unknown operation
-        return {
-            "operation_id": operation_id,
-            "status": "unknown",
-            "message": "Operation not found; nothing to cancel",
-            "quota": self._get_quota(),
-        }
-
-    def _success_response(self, req_id: Any, result: Any) -> dict[str, Any]:
-        """Format a JSON-RPC success response."""
-        return {"jsonrpc": "2.0", "id": req_id, "result": result}
-
-    def _error_response(self, req_id: Any, code: int, message: str) -> dict[str, Any]:
-        """Format a JSON-RPC error response."""
-        return {
-            "jsonrpc": "2.0",
-            "id": req_id,
-            "error": {"code": code, "message": message},
-        }
-
-    def run_stdio(self):
-        """Run MCP server in stdio mode (JSONRPC 2.0 over stdin/stdout)."""
-        while True:
-            try:
-                line = sys.stdin.readline()
-                if not line:
-                    break
-                req = json.loads(line)
-                resp = self.handle_request(req)
-                sys.stdout.write(json.dumps(resp) + "\n")
-                sys.stdout.flush()
-            except json.JSONDecodeError as e:
-                resp = {
-                    "jsonrpc": "2.0",
-                    "id": None,
-                    "error": {"code": -32700, "message": f"Parse error: {e}"},
-                }
-                sys.stdout.write(json.dumps(resp) + "\n")
-                sys.stdout.flush()
-            except KeyboardInterrupt:
-                break
-            except Exception as e:
-                resp = {
-                    "jsonrpc": "2.0",
-                    "id": None,
-                    "error": {"code": -32603, "message": f"Internal error: {e}"},
-                }
-                sys.stdout.write(json.dumps(resp) + "\n")
-                sys.stdout.flush()
-
-
-def main():
-    """Entry point for cowork-to-code-bridge-mcp CLI."""
-    parser = argparse.ArgumentParser(
-        description="MCP server for cowork-to-code-bridge"
-    )
-    parser.add_argument(
-        "--stdio",
-        action="store_true",
-        help="Run in stdio mode (JSONRPC 2.0 over stdin/stdout)",
-    )
-    parser.add_argument(
-        "--bridge-root",
-        default=None,
-        help="Override bridge root directory (default: auto-detect)",
-    )
-    parser.add_argument(
-        "--session-cache",
-        action="store_true",
-        help="Use fresh context per call (vs persistent agent). For single-shot workflows.",
-    )
-    args = parser.parse_args()
-
-    server = MCPServer(bridge_root=args.bridge_root)
-    server.session_cache_mode = args.session_cache
-
-    if args.stdio:
-        server.run_stdio()
-    else:
-        parser.print_help()
         sys.exit(1)
+
+    run_stdio()
 
 
 if __name__ == "__main__":
