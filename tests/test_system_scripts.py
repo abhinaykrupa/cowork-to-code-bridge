@@ -1098,12 +1098,24 @@ def test_mcp_audit_claude_not_found(mcp_audit_script: Path, tmp_path: Path) -> N
     """When no claude CLI is found anywhere, exit 127 with a JSON error key."""
     empty_bin = tmp_path / "empty_bin"
     empty_bin.mkdir()
+    # PATH must still resolve the shebang (`/usr/bin/env bash`) and the script's
+    # own tools (head, tr, hostname, date, python3) — nuking PATH entirely would
+    # make `/usr/bin/env bash` itself fail with exit 127 and empty stdout, which
+    # is what the script emits on a *different* error path, masking the real
+    # not-found behaviour. So keep only the standard system dirs (which carry no
+    # `claude`), prepend an empty dir, and point HOME at a claude-free tmp so
+    # find_claude()'s $HOME/.local and $HOME/.claude fallbacks miss too. The
+    # /opt/homebrew and /usr/local hardcoded fallbacks are covered by the skipif.
+    system_path = os.pathsep.join([str(empty_bin), "/usr/bin", "/bin", "/usr/sbin", "/sbin"])
     result = subprocess.run(
         [str(mcp_audit_script)],
         capture_output=True, text=True, check=False,
-        env={**os.environ, "LC_ALL": "C", "PATH": str(empty_bin), "HOME": str(tmp_path)},
+        env={**os.environ, "LC_ALL": "C", "PATH": system_path, "HOME": str(tmp_path)},
     )
-    assert result.returncode == 127
+    assert result.returncode == 127, (
+        f"expected exit 127, got {result.returncode}; "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
     data = json.loads(result.stdout)
     assert "error" in data
 
