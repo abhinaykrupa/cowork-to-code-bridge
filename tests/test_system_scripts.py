@@ -384,6 +384,51 @@ def test_process_kill_single_match_succeeds(
     assert "✓" in result.stdout or "terminated" in result.stdout.lower()
 
 
+# ── --json output mode (#7) ───────────────────────────────────────────────────
+
+def test_process_kill_json_success_shape(
+    process_kill_script: Path, tmp_path: Path
+) -> None:
+    """--json emits a parseable object with ok=true and the killed PID on success."""
+    stateful_pgrep = tmp_path / "fake_pgrep_json_ok"
+    stateful_pgrep.write_text(
+        '#!/usr/bin/env bash\n'
+        'STATE="$(dirname "$0")/.called"\n'
+        'if [[ ! -f "$STATE" ]]; then touch "$STATE"; printf "9999\\n"; exit 0; fi\n'
+        'exit 1\n'
+    )
+    stateful_pgrep.chmod(0o755)
+    fake_kill = _fake_kill(tmp_path, "success")
+    result = _run_pk(
+        process_kill_script, ["myapp", "--json"],
+        {"BRIDGE_PGREP_CMD": str(stateful_pgrep), "BRIDGE_KILL_CMD": str(fake_kill)},
+    )
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["target"] == "myapp"
+    assert payload["mode"] == "name"
+    assert payload["killed"] == [9999]
+    assert payload["remaining"] == []
+    assert payload["error"] is None
+
+
+def test_process_kill_json_error_shape(
+    process_kill_script: Path, tmp_path: Path
+) -> None:
+    """--json emits ok=false + a non-null error string on a refusal, and exits non-zero."""
+    fake_kill = _fake_kill(tmp_path, "success")
+    result = _run_pk(
+        process_kill_script, ["5", "--json"], {"BRIDGE_KILL_CMD": str(fake_kill)}
+    )
+    assert result.returncode != 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["mode"] == "pid"
+    assert payload["error"]  # non-empty message
+    assert payload["killed"] == []
+
+
 # ── Template sync ─────────────────────────────────────────────────────────────
 
 def test_process_kill_example_matches_install_template() -> None:

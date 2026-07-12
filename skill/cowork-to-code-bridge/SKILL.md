@@ -158,6 +158,7 @@ For simple, fast system queries, call a ready-made script directly:
 | "network status?" | `call_remote("scripts/mac_network.sh")` |
 | "what's listening on port 3000?" | `call_remote("scripts/port_check.sh", args=["3000"])` |
 | "what Docker containers are running?" | `call_remote("scripts/docker_ps.sh")` |
+| "stop my Rails server" / "kill pid 3912" | `call_remote("scripts/process_kill.sh", args=["rails"])` (name or PID; refuses protected/kernel processes, SIGTERM only; add `"--json"` for a parseable result, `"--all"` to kill every match of a name) |
 | "what's the git status of ~/myproject?" | `call_remote("scripts/git_status.sh", args=["/path/to/repo"])` |
 | "any outdated packages?" | `call_remote("scripts/pkg_outdated.sh")` |
 | "what MCPs do you have on your machine?" | `call_remote("scripts/mcp_audit.sh")` |
