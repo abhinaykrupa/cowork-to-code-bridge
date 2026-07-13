@@ -1221,3 +1221,94 @@ exit 1
     assert "note" in data
     assert "mcps" not in data
     assert "github: npx github-mcp" in data["mcps_raw"]
+
+
+# ── approve_plan.sh — plan-approval gate ─────────────────────────────────────
+#
+# approve_plan.sh ships in examples/allowed_scripts/ only (no install.sh heredoc,
+# no bridge/scripts copy — it's an opt-in gate the owner copies in by hand). It
+# reads the plan on stdin and, as shipped, is a no-op that (1) always exits 0
+# ("approve everything") and (2) appends one JSON line per plan to
+# $BRIDGE_ROOT/plan_log.jsonl. These tests lock in that shipped contract so a
+# future edit can't silently turn the default gate into a rejecter or corrupt
+# the audit log.
+
+
+@pytest.fixture()
+def approve_plan_script() -> Path:
+    path = REPO_ROOT / "examples" / "allowed_scripts" / "approve_plan.sh"
+    assert path.exists(), "approve_plan.sh missing from examples/allowed_scripts/"
+    return path
+
+
+def _run_approve_plan(
+    script: Path, plan: str, bridge_root: Path
+) -> subprocess.CompletedProcess:
+    env = {**os.environ, "BRIDGE_ROOT": str(bridge_root)}
+    return subprocess.run(
+        ["bash", str(script)],
+        input=plan,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+
+def test_approve_plan_default_approves(
+    approve_plan_script: Path, tmp_path: Path
+) -> None:
+    """Shipped no-op default must approve every plan (exit 0)."""
+    result = _run_approve_plan(approve_plan_script, "refactor the daemon", tmp_path)
+    assert result.returncode == 0, result.stderr
+
+
+def test_approve_plan_logs_valid_json_line(
+    approve_plan_script: Path, tmp_path: Path
+) -> None:
+    """Each plan appends exactly one valid JSON line round-tripping the plan text."""
+    plan = 'ship it; echo "done" && rm nothing'
+    result = _run_approve_plan(approve_plan_script, plan, tmp_path)
+    assert result.returncode == 0, result.stderr
+
+    log_file = tmp_path / "plan_log.jsonl"
+    assert log_file.exists(), "approve_plan.sh did not write plan_log.jsonl"
+    lines = log_file.read_text().splitlines()
+    assert len(lines) == 1
+    entry = json.loads(lines[0])  # raises if invalid JSON
+    assert entry["plan"] == plan
+    assert "ts" in entry and entry["ts"].endswith("Z")
+
+
+def test_approve_plan_log_survives_special_chars(
+    approve_plan_script: Path, tmp_path: Path
+) -> None:
+    """Quotes, backslashes, and newlines in a plan must not corrupt the JSON log."""
+    plan = 'line1 "quoted"\nline2 with \\backslash and \ttab'
+    result = _run_approve_plan(approve_plan_script, plan, tmp_path)
+    assert result.returncode == 0, result.stderr
+
+    entry = json.loads((tmp_path / "plan_log.jsonl").read_text().strip())
+    assert entry["plan"] == plan
+
+
+def test_approve_plan_appends_across_calls(
+    approve_plan_script: Path, tmp_path: Path
+) -> None:
+    """Repeated invocations append rather than truncate the log."""
+    _run_approve_plan(approve_plan_script, "plan one", tmp_path)
+    _run_approve_plan(approve_plan_script, "plan two", tmp_path)
+
+    lines = (tmp_path / "plan_log.jsonl").read_text().splitlines()
+    assert len(lines) == 2
+    assert json.loads(lines[0])["plan"] == "plan one"
+    assert json.loads(lines[1])["plan"] == "plan two"
+
+
+def test_approve_plan_empty_stdin_approves(
+    approve_plan_script: Path, tmp_path: Path
+) -> None:
+    """An empty plan is still a valid (approved) input, logged as an empty string."""
+    result = _run_approve_plan(approve_plan_script, "", tmp_path)
+    assert result.returncode == 0, result.stderr
+    entry = json.loads((tmp_path / "plan_log.jsonl").read_text().strip())
+    assert entry["plan"] == ""
