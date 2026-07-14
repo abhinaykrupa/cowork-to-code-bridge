@@ -75,6 +75,19 @@ MAX_TIMEOUT_SEC = int(os.environ.get("BRIDGE_MAX_TIMEOUT", "600"))
 # BRIDGE_MAX_BUDGET_USD so the owner ceiling can never be exceeded regardless
 # of what the caller sends.
 _MAX_BUDGET_USD_STR: str | None = os.environ.get("BRIDGE_MAX_BUDGET_USD") or None
+# Owner-set permission-scope ceiling for caller-supplied permission_scope (#47).
+# Mirrors the budget ceiling above: the caller may request a per-task scope, but
+# it is clamped so it can never grant MORE trust than the owner permits. Ordered
+# least→most trust: plan < readonly < edit < full. If unset there is no ceiling
+# (a caller may request up to 'full'). An unknown value is treated as no ceiling
+# and warned once at startup, so a typo can never silently widen trust.
+_SCOPE_RANK = {"plan": 0, "readonly": 1, "edit": 2, "full": 3}
+# _ceiling_raw is kept (not just the validated ceiling) so main() can name an
+# invalid value in its startup warning. An unrecognized value → no ceiling.
+_ceiling_raw = (os.environ.get("BRIDGE_PERMISSION_CEILING") or "").strip().lower()
+_PERMISSION_CEILING: str | None = (
+    _ceiling_raw if _ceiling_raw in _SCOPE_RANK else None
+)
 ALLOW_UNAUTH = os.environ.get("BRIDGE_ALLOW_UNAUTH") == "1"
 JOURNAL_WARN_BYTES = 10 * 1024 * 1024  # warn at 10 MB
 JOURNAL_ROTATE_BYTES = 50 * 1024 * 1024  # rotate at 50 MB (keep one .old)
@@ -630,6 +643,21 @@ def run_one(cmd_path: Path, token_required: str | None,
                 "full": "",
             }
             if scope_norm in scope_flags:
+                # Clamp against the owner's ceiling (BRIDGE_PERMISSION_CEILING).
+                # The caller can request a scope but can never exceed the owner's
+                # cap — e.g. owner sets ceiling='edit' and a task asks for 'full',
+                # it is clamped down to 'edit'. This is the missing enforcement
+                # behind #47/#75: without it, any caller with the bridge token
+                # could request 'full' and bypass sandboxing entirely.
+                if (
+                    _PERMISSION_CEILING is not None
+                    and _SCOPE_RANK[scope_norm] > _SCOPE_RANK[_PERMISSION_CEILING]
+                ):
+                    log(
+                        f"  ! clamping permission scope {scope_norm!r} → "
+                        f"{_PERMISSION_CEILING!r} (owner ceiling)"
+                    )
+                    scope_norm = _PERMISSION_CEILING
                 flags = scope_flags[scope_norm]
                 if flags:
                     env["CLAUDE_FLAGS"] = flags
@@ -730,6 +758,12 @@ def main() -> int:
         pass
 
     log(f"daemon up — polling {QUEUE} every {POLL_SEC}s. ctrl+c to stop.")
+    if _PERMISSION_CEILING is not None:
+        log(f"permission ceiling: caller scope clamped to {_PERMISSION_CEILING!r} max")
+    elif _ceiling_raw:
+        # Set but unrecognized — warn loudly; no ceiling is enforced (fail-open
+        # on the value, but the caller scope allowlist still bounds trust).
+        log(f"! ignoring invalid BRIDGE_PERMISSION_CEILING={_ceiling_raw!r} (no ceiling)")
 
     stop = False
 

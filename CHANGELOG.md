@@ -7,6 +7,14 @@ All notable changes to this project. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Permission-scope ceiling enforcement (#47).** The owner can now set
+  `BRIDGE_PERMISSION_CEILING` (`plan` < `readonly` < `edit` < `full`); a caller's
+  per-task `permission_scope` is clamped down to the ceiling before the script runs,
+  so the bridge token can never be used to widen trust beyond the owner's cap. An
+  invalid ceiling value is warned and enforces no ceiling (fail-open on the value,
+  the scope allowlist still bounds trust). `permission_scope` is now also exposed on
+  the MCP `escalate_to_claude` tool. Fixes the gap where the SKILL docs described a
+  ceiling that the daemon did not actually enforce.
 - **Community discussions posted** to 8 major AI framework communities: AutoGen, CrewAI, LiteLLM, LlamaIndex, Agno, DSPy, Haystack, Semantic Kernel, and Anthropic SDK Python — all with framework-specific integration patterns.
 - **GitHub topics expanded** to 20 (added: mcp, mcp-server, local-llm, llm-agents, crewai, langchain, autogen, code-execution, bridge, async) for better discoverability.
 - **README: Community & Discussions section** linking all active framework threads.

@@ -90,6 +90,16 @@ TOOLS: list[dict[str, Any]] = [
                         "Shown to the human if approve_plan.sh is installed."
                     ),
                 },
+                "permission_scope": {
+                    "type": "string",
+                    "enum": ["plan", "readonly", "edit", "full"],
+                    "description": (
+                        "Per-task permission scope (least→most permissive: plan, "
+                        "readonly, edit, full).  Clamped down to the owner's "
+                        "BRIDGE_PERMISSION_CEILING; ignored if the owner set a "
+                        "global CLAUDE_FLAGS.  Optional."
+                    ),
+                },
             },
             "required": ["task"],
         },
@@ -188,6 +198,7 @@ def _handle_escalate_to_claude(args: dict[str, Any]) -> dict[str, Any]:
     cwd = args.get("cwd")
     max_budget_usd = args.get("max_budget_usd")
     plan = args.get("plan")
+    permission_scope = args.get("permission_scope")
 
     result = _call_remote(
         script="scripts/run_claude.sh",
@@ -196,6 +207,7 @@ def _handle_escalate_to_claude(args: dict[str, Any]) -> dict[str, Any]:
         cwd=cwd,
         plan=plan,
         max_budget_usd=max_budget_usd,
+        permission_scope=permission_scope,
     )
     return result
 

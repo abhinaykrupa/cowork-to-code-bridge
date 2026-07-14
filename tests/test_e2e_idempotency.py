@@ -297,6 +297,87 @@ def test_budget_caller_cannot_override_owner_ceiling(tmp_path, monkeypatch):
     assert "BRIDGE_MAX_BUDGET_USD=5.0" in res["stdout"]
 
 
+def _scope_bridge(tmp_path, monkeypatch, ceiling=None):
+    """Return a bridge fixture with an optional BRIDGE_PERMISSION_CEILING.
+
+    Uses a dump_env.sh script so tests can inspect the CLAUDE_FLAGS the daemon
+    injects for a caller-supplied permission_scope.
+    """
+    monkeypatch.setenv("BRIDGE_ROOT", str(tmp_path))
+    monkeypatch.setenv("BRIDGE_TOKEN", "test-token")
+    # Ensure no owner CLAUDE_FLAGS is set (that would short-circuit scope logic).
+    monkeypatch.delenv("CLAUDE_FLAGS", raising=False)
+    if ceiling is not None:
+        monkeypatch.setenv("BRIDGE_PERMISSION_CEILING", str(ceiling))
+    else:
+        monkeypatch.delenv("BRIDGE_PERMISSION_CEILING", raising=False)
+    import cowork_to_code_bridge.daemon as d
+    importlib.reload(d)
+    for sub in (d.QUEUE, d.RESULTS, d.PROCESSED, d.INFLIGHT, d.PROGRESS, d.SCRIPTS_DIR):
+        sub.mkdir(parents=True, exist_ok=True)
+    script = d.SCRIPTS_DIR / "dump_env.sh"
+    script.write_text("#!/bin/bash\nenv\n")
+    script.chmod(0o755)
+    return d
+
+
+def _run_scope(d, cmd_id, scope):
+    p = {"id": cmd_id, "script": "scripts/dump_env.sh", "args": [],
+         "token": "test-token", "timeout": 5, "permission_scope": scope}
+    (d.QUEUE / f"{cmd_id}.json").write_text(json.dumps(p))
+    d.run_one(d.QUEUE / f"{cmd_id}.json", "test-token", {}, {})
+    res = json.loads((d.RESULTS / f"{cmd_id}.json").read_text())
+    assert res["exit_code"] == 0
+    return res["stdout"]
+
+
+def test_scope_edit_forwarded_as_claude_flags(tmp_path, monkeypatch):
+    """permission_scope='edit' with no ceiling injects the edit CLAUDE_FLAGS."""
+    d = _scope_bridge(tmp_path, monkeypatch)
+    out = _run_scope(d, "s1", "edit")
+    assert "CLAUDE_FLAGS=--allowedTools Read,Glob,Grep,Edit,Write" in out
+
+
+def test_scope_full_injects_no_flags(tmp_path, monkeypatch):
+    """permission_scope='full' leaves CLAUDE_FLAGS unset (defers to CLI default)."""
+    d = _scope_bridge(tmp_path, monkeypatch)
+    out = _run_scope(d, "s2", "full")
+    assert "CLAUDE_FLAGS=" not in out
+
+
+def test_scope_ceiling_clamps_full_to_edit(tmp_path, monkeypatch):
+    """Owner ceiling='edit' clamps a caller's 'full' request down to 'edit'."""
+    d = _scope_bridge(tmp_path, monkeypatch, ceiling="edit")
+    out = _run_scope(d, "s3", "full")
+    # Clamped: gets edit flags, NOT unrestricted full.
+    assert "CLAUDE_FLAGS=--allowedTools Read,Glob,Grep,Edit,Write" in out
+
+
+def test_scope_ceiling_clamps_edit_to_plan(tmp_path, monkeypatch):
+    """Owner ceiling='plan' clamps a caller's 'edit' request down to 'plan'."""
+    d = _scope_bridge(tmp_path, monkeypatch, ceiling="plan")
+    out = _run_scope(d, "s4", "edit")
+    assert "CLAUDE_FLAGS=--permission-mode plan" in out
+
+
+def test_scope_at_or_below_ceiling_not_clamped(tmp_path, monkeypatch):
+    """A request at or below the ceiling passes through unchanged."""
+    d = _scope_bridge(tmp_path, monkeypatch, ceiling="edit")
+    out = _run_scope(d, "s5", "readonly")
+    assert "CLAUDE_FLAGS=--allowedTools Read,Glob,Grep" in out
+    # readonly must NOT have been widened up to the edit ceiling.
+    assert "Edit,Write" not in out
+
+
+def test_scope_invalid_ceiling_ignored_no_clamp(tmp_path, monkeypatch):
+    """An unrecognized BRIDGE_PERMISSION_CEILING enforces no ceiling (fail-open)."""
+    d = _scope_bridge(tmp_path, monkeypatch, ceiling="bogus")
+    assert d._PERMISSION_CEILING is None
+    out = _run_scope(d, "s6", "full")
+    # No clamp: full stays full (no flags injected).
+    assert "CLAUDE_FLAGS=" not in out
+
+
 def test_e2e_oversized_command_rejected(bridge):
     """A command file larger than MAX_CMD_BYTES is rejected, not slurped."""
     d, _ = bridge
