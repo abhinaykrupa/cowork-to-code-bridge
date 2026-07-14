@@ -145,6 +145,63 @@ print(r["exit_code"]); print(r["stdout"])
 `on_status` is called every ~2s with `{"elapsed_s": int, "last_line": str, "state": "running"|"done"|"error"}`.
 `on_progress` and `on_status` are independent — use either or both.
 
+### Per-task permission modes (fine-grained access control)
+
+Different tasks need different trust levels. Use `permission_scope` to sandbox each task without needing the owner to change their global `CLAUDE_FLAGS`:
+
+```python
+# Read-only task — summarize without write access
+r = call_remote(
+    "scripts/run_claude.sh",
+    args=["Summarize this PR", "/Users/<them>/projects/myapp"],
+    timeout=120,
+    idempotency_key="summarize-pr-1",
+    permission_scope="plan",  # read-only: --permission-mode plan
+)
+
+# Edit task — refactor + commit
+r = call_remote(
+    "scripts/run_claude.sh",
+    args=["Refactor the auth module and commit", "/Users/<them>/projects/myapp"],
+    timeout=600,
+    idempotency_key="refactor-auth-1",
+    permission_scope="edit",  # write allowed: read + edit/write tools
+)
+
+# Limited read-only (specific tools only)
+r = call_remote(
+    "scripts/run_claude.sh",
+    args=["Find all TODO comments", "/Users/<them>/projects/myapp"],
+    timeout=300,
+    idempotency_key="find-todos-1",
+    permission_scope="readonly",  # Read, Glob, Grep only
+)
+
+# Full access (if owner's ceiling allows)
+r = call_remote(
+    "scripts/run_claude.sh",
+    args=["Deploy to production", "/Users/<them>/projects/myapp"],
+    timeout=900,
+    idempotency_key="deploy-prod-1",
+    permission_scope="full",  # no tool restrictions
+)
+```
+
+**Permission scope values:**
+- `"plan"` — Read-only. Claude can analyze but not modify. (`--permission-mode plan`)
+- `"readonly"` — Limited read tools: Read, Glob, Grep only.
+- `"edit"` — Read + write: Read, Glob, Grep, Edit, Write.
+- `"full"` — No tool restrictions (default if not specified).
+
+**Security model:** The owner's `BRIDGE_PERMISSION_CEILING` (set in launchd/systemd) is the hard limit. Cowork can only request within that ceiling per task. If the owner set global `CLAUDE_FLAGS`, it always wins (task-level scope ignored).
+
+Example owner setup (macOS launchd):
+```bash
+# In ~/.cowork-to-code-bridge/cowork-to-code-bridge.plist or launchd env
+# Set max permission level to "edit" — Cowork can request up to "edit" per task
+BRIDGE_PERMISSION_CEILING=edit
+```
+
 ## Step 3 — quick fixed actions (no agent needed)
 
 For simple, fast system queries, call a ready-made script directly:

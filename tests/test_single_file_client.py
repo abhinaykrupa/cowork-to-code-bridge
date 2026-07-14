@@ -130,3 +130,49 @@ def test_single_file_signatures_match_package_for_all_public_api():
         if s != p:
             drifted[name] = {"single": sorted(s), "package": sorted(p)}
     assert not drifted, f"single-file signatures drifted from package: {drifted}"
+
+
+def test_call_remote_accepts_permission_scope(tmp_path):
+    """call_remote() accepts permission_scope parameter and passes it to daemon."""
+    import json
+    from cowork_to_code_bridge import queue_task
+
+    bridge_root = tmp_path / "bridge"
+    bridge_root.mkdir()
+    (bridge_root / "queue").mkdir()
+    (bridge_root / "results").mkdir()
+
+    # Mock daemon token
+    (bridge_root / ".env").write_text("BRIDGE_TOKEN=test-token\n")
+
+    # Queue a task with permission_scope
+    result = queue_task(
+        "scripts/test.sh",
+        args=["hello"],
+        bridge_root=bridge_root,
+        idempotency_key="test-perm-1",
+        permission_scope="edit",
+    )
+
+    # Verify the queued task contains permission_scope
+    task_id = result["task_id"]
+    cmd_file = bridge_root / "queue" / f"{task_id}.json"
+    assert cmd_file.exists()
+
+    cmd = json.loads(cmd_file.read_text())
+    assert cmd.get("permission_scope") == "edit"
+
+
+def test_call_remote_streaming_accepts_permission_scope():
+    """call_remote_streaming() signature includes permission_scope parameter."""
+    import inspect
+    from cowork_to_code_bridge import call_remote_streaming
+
+    # Verify the function signature includes permission_scope
+    sig = inspect.signature(call_remote_streaming)
+    assert "permission_scope" in sig.parameters, \
+        "call_remote_streaming() missing permission_scope parameter"
+
+    # Verify it's optional (has default value)
+    param = sig.parameters["permission_scope"]
+    assert param.default is None, "permission_scope should default to None"

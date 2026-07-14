@@ -272,6 +272,7 @@ def call_remote(
     idempotency_key: str | None = None,
     plan: str | None = None,
     max_budget_usd: float | None = None,
+    permission_scope: str | None = None,
     interactive: bool = False,
 ) -> dict[str, Any]:
     """Submit a script invocation to the Mac daemon and wait for its result.
@@ -303,6 +304,11 @@ def call_remote(
             can set ``BRIDGE_MAX_BUDGET_USD`` as a hard global ceiling; if
             both are present the effective limit is min(max_budget_usd,
             BRIDGE_MAX_BUDGET_USD).  Ignored for non-claude scripts.
+        permission_scope: Optional per-task permission mode. One of:
+            'plan' (read-only), 'readonly', 'edit', or 'full' (no restrictions).
+            If set, overrides the global CLAUDE_FLAGS for this task only.
+            The daemon validates against the owner's BRIDGE_PERMISSION_CEILING.
+            Ignored if owner set CLAUDE_FLAGS env var (takes precedence).
 
     Returns:
         Dict with keys: id, exit_code, stdout, stderr, ts_completed.
@@ -338,6 +344,8 @@ def call_remote(
         payload["plan"] = plan
     if max_budget_usd is not None:
         payload["max_budget_usd"] = float(max_budget_usd)
+    if permission_scope is not None:
+        payload["permission_scope"] = str(permission_scope).strip().lower()
 
     token = _load_token(root)
     if token:
@@ -381,6 +389,7 @@ def call_remote_streaming(
     on_status=None,
     plan: str | None = None,
     max_budget_usd: float | None = None,
+    permission_scope: str | None = None,
     interactive: bool = False,
 ) -> dict[str, Any]:
     """Like call_remote, but streams live output while the task runs.
@@ -402,6 +411,10 @@ def call_remote_streaming(
         exit_code  (int)  present only when state != "running"
     Called only when the file changes (mtime-gated), so it fires at most once
     per daemon write cycle (~2 s).  Useful for a spinner / elapsed-time ticker.
+
+    permission_scope: Optional per-task permission mode. Same values and
+    behavior as call_remote(). Passed to daemon, which validates and
+    injects into CLAUDE_FLAGS (unless owner already set it globally).
     """
     root = Path(bridge_root) if bridge_root else _resolve_bridge_root()
     queue = root / "queue"
@@ -429,6 +442,8 @@ def call_remote_streaming(
         payload["plan"] = plan
     if max_budget_usd is not None:
         payload["max_budget_usd"] = float(max_budget_usd)
+    if permission_scope is not None:
+        payload["permission_scope"] = str(permission_scope).strip().lower()
     token = _load_token(root)
     if token:
         payload["token"] = token

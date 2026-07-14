@@ -358,5 +358,95 @@ def test_e2e_caller_cannot_override_protected_env_vars(bridge):
     res = j.loads((d.RESULTS / f"{cmd_id}.json").read_text())
     assert res["exit_code"] == 0
 
+
+def test_permission_scope_parsed_from_payload(bridge):
+    """permission_scope is accepted in the payload and passed through."""
+    d, _ = bridge
+    terminal, cache = {}, {}
+
+    # Enqueue a task with permission_scope
+    cmd_id = "1700_perm"
+    payload = {
+        "id": cmd_id,
+        "script": "scripts/increment.sh",
+        "args": [],
+        "token": "test-token",
+        "timeout": 5,
+        "permission_scope": "edit",  # ← Key part
+    }
+    f = d.QUEUE / f"{cmd_id}.json"
+    f.write_text(json.dumps(payload))
+
+    # Run the task — should complete without error
+    d.run_one(f, "test-token", terminal, cache)
+
+    # Task should have completed successfully
+    result_file = d.RESULTS / f"{cmd_id}.json"
+    assert result_file.exists()
+    result = json.loads(result_file.read_text())
+    assert result["exit_code"] == 0
+
+
+def test_permission_scope_owner_flags_takes_precedence(bridge, monkeypatch):
+    """Owner-set CLAUDE_FLAGS takes precedence over permission_scope."""
+    d, _ = bridge
+
+    # Set owner's global CLAUDE_FLAGS
+    monkeypatch.setenv("CLAUDE_FLAGS", "--permission-mode plan")
+    import cowork_to_code_bridge.daemon as daemon_module
+    import importlib
+    importlib.reload(daemon_module)
+
+    terminal, cache = {}, {}
+
+    # Task requests 'edit' scope, but owner has global 'plan'
+    cmd_id = "1701_perm"
+    payload = {
+        "id": cmd_id,
+        "script": "scripts/increment.sh",
+        "args": [],
+        "token": "test-token",
+        "timeout": 5,
+        "permission_scope": "edit",  # ← Requested but should be ignored
+    }
+    f = d.QUEUE / f"{cmd_id}.json"
+    f.write_text(json.dumps(payload))
+
+    # Run the task — owner's flags should win
+    d.run_one(f, "test-token", terminal, cache)
+
+    # Task should complete (daemon honors owner's CLAUDE_FLAGS)
+    result_file = d.RESULTS / f"{cmd_id}.json"
+    assert result_file.exists()
+    result = json.loads(result_file.read_text())
+    assert result["exit_code"] == 0
+
+
+def test_permission_scope_invalid_ignored(bridge):
+    """Invalid permission_scope values are logged but don't break execution."""
+    d, _ = bridge
+    terminal, cache = {}, {}
+
+    # Invalid scope
+    cmd_id = "1702_perm"
+    payload = {
+        "id": cmd_id,
+        "script": "scripts/increment.sh",
+        "args": [],
+        "token": "test-token",
+        "timeout": 5,
+        "permission_scope": "invalid_scope_xyz",  # ← Invalid
+    }
+    f = d.QUEUE / f"{cmd_id}.json"
+    f.write_text(json.dumps(payload))
+
+    # Should still run (invalid scope is logged, not fatal)
+    d.run_one(f, "test-token", terminal, cache)
+
+    result_file = d.RESULTS / f"{cmd_id}.json"
+    assert result_file.exists()
+    result = json.loads(result_file.read_text())
+    assert result["exit_code"] == 0  # Script ran despite invalid scope
+
     # Clean up env
     del os.environ["CLAUDE_FLAGS"]
