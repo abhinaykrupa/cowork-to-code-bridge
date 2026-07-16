@@ -193,6 +193,30 @@ def test_format_status_line_show_last_line():
     assert "Compiling foo.c" in line
 
 
+def test_format_status_line_show_last_line_short_line_intact():
+    # A short line is appended verbatim (no ellipsis).
+    line = format_status_line(
+        {"elapsed_s": 1, "last_line": "ok", "state": "running"},
+        show_last_line=True,
+    )
+    tail = line.split("  ·  ", 1)[1]
+    assert tail == "ok"  # verbatim, not clipped
+
+
+def test_format_status_line_truncates_long_last_line():
+    # A wide log line must be clipped so the ticker stays a compact one-liner.
+    long_line = "x" * 500
+    line = format_status_line(
+        {"elapsed_s": 3, "last_line": long_line, "state": "running"},
+        show_last_line=True,
+    )
+    assert line.endswith("…")
+    # The appended tail (after the "  ·  " separator) is bounded.
+    tail = line.split("  ·  ", 1)[1]
+    assert len(tail) <= 80
+    assert long_line not in line
+
+
 def test_format_status_line_handles_missing_elapsed():
     # Defensive: empty/garbage dict must not raise.
     assert "0s elapsed" in format_status_line({})

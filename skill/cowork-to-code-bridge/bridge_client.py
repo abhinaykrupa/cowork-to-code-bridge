@@ -131,6 +131,12 @@ def queue_task(
 # Braille spinner frames — same set Claude Code uses for its own ticker.
 _SPINNER_FRAMES = "⣾⣽⣻⢿⡿⣟⣯⣷"
 
+# Max width of the appended ``last_line`` in the ticker. A status ticker is a
+# compact one-liner; an unbounded script line (a wide `ls`, a long stack trace)
+# would blow up the width, so we clip with an ellipsis. The daemon keeps the
+# full line in the progress log — this only trims the human-facing ticker.
+_TICKER_LAST_LINE_MAX = 80
+
 
 def format_status_line(
     status: dict[str, Any],
@@ -168,6 +174,8 @@ def format_status_line(
 
     if show_last_line:
         last = str(status.get("last_line", "")).strip()
+        if len(last) > _TICKER_LAST_LINE_MAX:
+            last = last[: _TICKER_LAST_LINE_MAX - 1].rstrip() + "…"
         if last:
             head = f"{head}  ·  {last}"
     return head
