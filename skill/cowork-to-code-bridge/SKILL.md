@@ -148,6 +148,51 @@ print(r["exit_code"]); print(r["stdout"])
 `on_status` is called every ~2s with `{"elapsed_s": int, "last_line": str, "state": "running"|"done"|"error"}`.
 `on_progress` and `on_status` are independent — use either or both.
 
+### Interactive tasks — answering a question mid-run
+
+A task on the machine can stop and ask something ("which database should I point
+this at?") via `request_cowork.sh`. Pass `interactive=True` and
+`call_remote_streaming` returns **early**, before the task is finished, as soon as
+that question appears:
+
+```python
+r = call_remote_streaming(
+    "scripts/run_claude.sh",
+    args=["Deploy the app; ask me before touching prod", "/Users/<them>/projects/app"],
+    timeout=1800, idempotency_key="deploy-1", interactive=True,
+)
+```
+
+Check `r["state"]` before reading `r["exit_code"]` — an `awaiting_reply` dict has
+no result fields, so treating it as a finished run silently misreads a question as
+success:
+
+```python
+from bridge_client import reply_to_machine, resume_remote
+
+while r.get("state") == "awaiting_reply":
+    answer = ask_the_user(r["question"])        # relay it, get a real answer
+    reply_to_machine(r["request_id"], answer)
+    r = resume_remote(r["cmd_id"], r["_deadline"])   # task picks up where it paused
+
+print(r["exit_code"])   # now it's the real result
+```
+
+The early return looks like this:
+
+| Field | Meaning |
+|---|---|
+| `state` | always `"awaiting_reply"` |
+| `question` | the plain-English question from the machine — show this to the user |
+| `request_id` | pass to `reply_to_machine()` |
+| `cmd_id` | pass to `resume_remote()` |
+| `_deadline` | absolute epoch the task still dies at — pass to `resume_remote()` |
+
+Use a **generous `timeout`** for interactive tasks: the clock keeps running while
+you wait on the human, and the task dies at `_deadline` regardless. A task whose
+question times out exits non-zero rather than looking approved. The loop above is
+a `while`, not an `if`, because a task may ask more than once.
+
 ## Step 3 — quick fixed actions (no agent needed)
 
 For simple, fast system queries, call a ready-made script directly:
@@ -260,10 +305,7 @@ elif r.get("exit_code") != 0:
 `mcp_proxy.sh` always exits 0 — MCP-level errors appear inside the JSON under
 `r["mcp_response"]["error"]`, not the process exit code.
 
-## Step 6 — check the inbox (reverse direction: Claude Code → Cowork)
 ## Step 5 — cross-surface MCP audit
-
-### Cross-surface MCP audit
 
 There is no built-in Anthropic tool to compare MCPs registered in local Claude
 Code vs what a Cowork session can reach (ref: anthropics/claude-code#56353).
@@ -292,6 +334,7 @@ this Cowork session. Any MCP present locally but absent here is a gap —
 the user may need to install the corresponding Cowork plugin or expose the
 MCP via the bridge.
 
+## Step 6 — check the inbox (reverse direction: Claude Code → Cowork)
 
 Claude Code on the user's machine can leave requests for a Cowork session in
 `BRIDGE_ROOT/to_cowork/`. When the user says "check my inbox", "any requests
