@@ -222,6 +222,7 @@ The install gives you these to start:
 - `mac_disk.sh` — disk space
 - `mac_top.sh` — top processes by CPU and memory
 - `mac_network.sh` — network status and connectivity
+- `process_kill.sh` — terminate a named process or PID on your machine (refuses ambiguous name matches unless `--all`; `--json` for structured output)
 - `port_check.sh` — shows what is listening on a TCP port
 - `docker_ps.sh` — lists running Docker containers
 - `docker_logs.sh` — tail a container's logs (optional line count, default 50)
@@ -231,6 +232,7 @@ The install gives you these to start:
 - `env_check.sh` — shows key environment values (PATH, `BRIDGE_ROOT`, `CLAUDE_FLAGS`, `claude` CLI) without leaking your token
 - `disk_hogs.sh` — biggest files/folders in a path (pass a directory and an optional count)
 - `open_browser.sh` — opens an `http(s)`/localhost URL in your default browser (handy after a local dev server starts)
+- `mcp_audit.sh` — emits a JSON snapshot of the MCP servers registered in your local Claude Code so Cowork can diff them against what it can reach (spot a Postgres MCP that's local-only, etc.)
 - `request_cowork.sh` — hand a request the *other* way: from Claude Code on your machine to a Cowork session (async inbox)
 - `ping.sh` — confirms the bridge works
 - `hello.sh` — echoes back a greeting
