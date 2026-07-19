@@ -105,6 +105,47 @@ runs (e.g. a `"full"` request under an `edit` ceiling runs as `"edit"`). If the 
 set a global `CLAUDE_FLAGS`, it always wins and the per-task scope is ignored. Omit
 `permission_scope` to use the owner's global `CLAUDE_FLAGS` unchanged.
 
+**Pick the model tier and reasoning effort per task** so a cheap tier handles
+cheap work and frontier quota is spent only where it's needed:
+
+```python
+r = call_remote(
+    "scripts/run_claude.sh",
+    args=["Redesign the daemon's dispatch loop for multi-tenant tasks", "/path/to/repo"],
+    timeout=600, idempotency_key="redesign-dispatch-1",
+    model_tier="opus",     # haiku | sonnet | opus | fable
+    effort="high",         # low | medium | high
+)
+```
+
+The daemon injects `CLAUDE_MODEL_TIER` into the child env; `run_claude.sh` maps it
+to a concrete `--model` id (`haiku`→`claude-haiku-4-5-20251001`, `sonnet`→
+`claude-sonnet-4-6`, `opus`→`claude-opus-4-8`, `fable`→`claude-fable-5`). An
+unknown tier falls back to the CLI's default model. Omit `model_tier` and the owner's
+default model is used.
+
+**Don't know which tier to pick?** Let the router choose from the task text — cheap
+tiers for triage/summaries, higher tiers for design/architecture:
+
+```python
+from cowork_to_code_bridge.model_router import auto_select
+
+sel = auto_select("Refactor the auth module and add tests")
+# → {"tier": "sonnet", "effort": "medium", "reasoning": "...", "matched_signals": {...}, ...}
+r = call_remote(
+    "scripts/run_claude.sh",
+    args=["Refactor the auth module and add tests", "/path/to/repo"],
+    timeout=300, idempotency_key="refactor-auth-1",
+    model_tier=sel["tier"], effort=sel["effort"],
+)
+```
+
+`auto_select` whole-word-matches task signals (so "address" won't trip "add" and
+"latest" won't trip "test") and returns `{tier, effort, matched_signals, reasoning,
+is_default}`. Map `sel["tier"]` to the `model_tier` argument and `sel["effort"]` to
+`effort` — or override either before sending. It does **not** recommend a
+`permission_scope`; set that yourself from the read/write needs of the task.
+
 ### Long tasks — stream live progress (don't wait blind)
 
 Builds and test runs can take minutes. Use `call_remote_streaming` so you see
