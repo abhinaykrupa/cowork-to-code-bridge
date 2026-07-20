@@ -619,8 +619,44 @@ Returns a list (empty if none). Safe to poll.
 | Quick command, need result now         | call_remote                      |
 | Long build/test, or short timeout      | queue_task + poll_task_result    |
 | Avoid duplicate runs on retry          | queue_task(idempotency_key=...)  |
+| Cap what a task can cost               | max_budget_usd=2.00              |
+| Limit what a task may change           | permission_scope="readonly"      |
+| Get a human to approve first           | plan="what this will do"         |
 | Machine reports progress to Cowork     | post_message_to_cowork           |
 | Cowork reads machine updates           | detect_messages_from_claude_code |
+
+## Safety controls (opt-in, per task)
+
+These are extra keyword arguments to call_remote / queue_task. All are
+optional; the daemon's owner sets the hard ceilings, and a caller can only
+ever narrow them, never widen them.
+
+### max_budget_usd=<float>
+Per-task API spend ceiling, passed to run_claude.sh as --max-budget-usd. If
+the agent hits the ceiling before finishing, it stops and reports what it
+managed to do. The owner may set BRIDGE_MAX_BUDGET_USD as a global hard
+ceiling; when both exist the effective limit is the LOWER of the two.
+Ignored for non-claude scripts.
+
+### permission_scope=<"plan"|"readonly"|"edit"|"full">
+How much the Claude Code agent is allowed to do on the machine for this one
+task. The owner may set BRIDGE_PERMISSION_CEILING; a caller asking for more
+than the ceiling is clamped down to it silently.
+
+### plan=<str>
+Plain-English description of what the task will do. If scripts/approve_plan.sh
+exists on the machine, the daemon runs it with this text BEFORE the real
+script — a human-in-the-loop gate. The hook exits 0 to allow or 2 to reject
+(rejection returns exit_code=-1 with the hook's stderr as the error). If the
+hook isn't installed the field is ignored.
+
+Example — a costly refactor, capped and sandboxed:
+    queue_task("scripts/run_claude.sh",
+               args=["Refactor the auth module", "/path/to/repo"],
+               timeout=1800,
+               max_budget_usd=2.00,
+               permission_scope="edit",
+               idempotency_key="refactor-auth-2026-06-18")
 
 ## Async vs blocking
 - **Blocking (call_remote):** simplest; one call, one result. Risk: if the work
@@ -667,6 +703,10 @@ Bidirectional — watch for progress from the machine:
 - Always pass an **idempotency_key** for state-changing work (deploys, migrations)
   so retries don't double-fire.
 - **Poll, don't spin:** call poll_task_result on later turns, not in a tight loop.
+- Pass **max_budget_usd** on any run_claude.sh task whose scope is open-ended
+  ("refactor everything") — an uncapped agent task can run for hours.
+- Ask for the **narrowest permission_scope** that still does the job; use
+  "readonly" for anything that only needs to inspect the machine.
 - Use **post_message_to_cowork** from the machine side to stream progress instead
   of going silent during long jobs.
 - Treat reads (poll/detect) as free and side-effect-free; treat queue/call as the
