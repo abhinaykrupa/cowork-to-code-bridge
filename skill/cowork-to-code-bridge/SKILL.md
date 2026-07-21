@@ -114,9 +114,13 @@ r = call_remote(
     args=["Redesign the daemon's dispatch loop for multi-tenant tasks", "/path/to/repo"],
     timeout=600, idempotency_key="redesign-dispatch-1",
     model_tier="opus",     # haiku | sonnet | opus | fable
-    effort="high",         # low | medium | high
+    effort="high",         # low | medium | high | xhigh | max
 )
 ```
+
+`effort` maps to the claude CLI's `--effort` flag. Reach past `high` for the
+hardest reasoning (`xhigh`, `max`) and drop to `low` for mechanical work; an
+unknown value falls back to the CLI's default effort.
 
 The daemon injects `CLAUDE_MODEL_TIER` into the child env; `run_claude.sh` maps it
 to a concrete `--model` id (`haiku`→`claude-haiku-4-5-20251001`, `sonnet`→
