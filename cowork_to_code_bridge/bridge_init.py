@@ -603,6 +603,18 @@ Use for long-running work, or whenever your sandbox has a short timeout (e.g.
 ### poll_task_result(task_id)  — NON-BLOCKING, IDEMPOTENT
 Check on a queued task. Returns status one of: "queued", "running", "completed"
 (with full result), or "unknown". Safe to call repeatedly — no side effects.
+While "running" the dict also carries a live ticker from the daemon's status
+file (written every ~2s): elapsed_s, last_line, state, plus a pre-rendered
+status_line like "⣾ Working… 42s elapsed" — show it to the user instead of
+going silent between polls.
+
+### call_remote_streaming(script, ..., on_progress=None, on_status=None)  — BLOCKING, LIVE OUTPUT
+Like call_remote, but streams the script's output while it runs. on_progress
+receives each new chunk of stdout/stderr text; on_status receives the daemon's
+~2s status dicts ({elapsed_s, last_line, state}) — feed them to
+format_status_line(status, verb="Building", show_last_line=True) for a
+spinner/elapsed ticker. Same result dict and idempotency guarantees as
+call_remote. Use for builds and test runs where waiting blind is unacceptable.
 
 ### post_message_to_cowork(message_type, content, parent_task_id=None)
 Used by Claude Code (machine side) to push a structured update back to Cowork:
@@ -618,6 +630,7 @@ Returns a list (empty if none). Safe to poll.
 |----------------------------------------|----------------------------------|
 | Quick command, need result now         | call_remote                      |
 | Long build/test, or short timeout      | queue_task + poll_task_result    |
+| Watch a long task's output live        | call_remote_streaming            |
 | Avoid duplicate runs on retry          | queue_task(idempotency_key=...)  |
 | Cap what a task can cost               | max_budget_usd=2.00              |
 | Limit what a task may change           | permission_scope="readonly"      |
@@ -693,6 +706,14 @@ Async — long build, poll later:
     if res["status"] == "completed":
         print(res["exit_code"], res["stdout"])
 
+Streaming — long build with a live ticker:
+    from cowork_to_code_bridge.client import call_remote_streaming, format_status_line
+    r = call_remote_streaming(
+        "scripts/build.sh", timeout=900, idempotency_key="build-main-2026-06-18",
+        on_status=lambda s: print(format_status_line(s, verb="Building",
+                                                     show_last_line=True)),
+    )
+
 Bidirectional — watch for progress from the machine:
     from cowork_to_code_bridge.client import detect_messages_from_claude_code
     for m in detect_messages_from_claude_code(parent_task_id=job["task_id"]):
@@ -703,6 +724,8 @@ Bidirectional — watch for progress from the machine:
 - Always pass an **idempotency_key** for state-changing work (deploys, migrations)
   so retries don't double-fire.
 - **Poll, don't spin:** call poll_task_result on later turns, not in a tight loop.
+- While a task is "running", surface poll_task_result's **status_line** (or use
+  call_remote_streaming's on_status) so the user sees a live spinner, not silence.
 - Pass **max_budget_usd** on any run_claude.sh task whose scope is open-ended
   ("refactor everything") — an uncapped agent task can run for hours.
 - Ask for the **narrowest permission_scope** that still does the job; use

@@ -192,6 +192,11 @@ def test_get_bridge_context_covers_core_functions():
     assert "queue_task" in ctx
     assert "poll_task_result" in ctx
     assert "call_remote" in ctx
+    # Live-progress surface (#56): streaming call + ticker helpers must be
+    # discoverable by a fresh Cowork session, or long tasks go silent.
+    assert "call_remote_streaming" in ctx
+    assert "status_line" in ctx
+    assert "format_status_line" in ctx
 
     # Common patterns
     assert "idempotency" in ctx.lower() or "idempotent" in ctx.lower()

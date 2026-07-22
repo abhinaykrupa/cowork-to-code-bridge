@@ -69,6 +69,17 @@ for long-running work or short sandbox timeouts. Pair with `poll_task_result`.
 ### `poll_task_result(task_id)` — **non-blocking, idempotent**
 Check on a queued task. `status` ∈ `{"queued", "running", "completed", "unknown"}`;
 on `"completed"` the dict also carries the full result. Safe to call repeatedly.
+While `"running"` it also surfaces the daemon's live ticker (written every ~2s):
+`elapsed_s`, `last_line`, `state`, plus a pre-rendered `status_line` like
+`⣾ Working… 42s elapsed` — show it to the user instead of going silent between polls.
+
+### `call_remote_streaming(script, ..., on_progress=None, on_status=None)` — **blocking, live output**
+Like `call_remote`, but streams output while the task runs. `on_progress` receives
+each new chunk of stdout/stderr; `on_status` receives the daemon's ~2s status dicts
+(`{elapsed_s, last_line, state}`) — feed them to
+`format_status_line(status, verb="Building", show_last_line=True)` for a
+spinner/elapsed ticker. Same result dict and idempotency guarantees as
+`call_remote`. Use for builds/test runs where waiting blind is unacceptable.
 
 ### `post_message_to_cowork(message_type, content, parent_task_id=None)`
 Machine side → Cowork. `message_type` ∈ `{"progress","completed","error","info"}`.
@@ -167,6 +178,7 @@ See BRIDGE_INIT.md for routing requirements.
 |--------------------------------------|------------------------------------|
 | Quick command, need result now       | `call_remote`                      |
 | Long build/test, or short timeout    | `queue_task` + `poll_task_result`  |
+| Watch a long task's output live      | `call_remote_streaming`            |
 | Avoid duplicate runs on retry        | `queue_task(idempotency_key=...)`  |
 | Machine reports progress to Cowork    | `post_message_to_cowork`           |
 | Cowork reads machine updates          | `detect_messages_from_claude_code` |
@@ -217,6 +229,16 @@ if res["status"] == "completed":
     print(res["exit_code"], res["stdout"])
 ```
 
+**Streaming — long build with a live ticker:**
+```python
+from cowork_to_code_bridge.client import call_remote_streaming, format_status_line
+r = call_remote_streaming(
+    "scripts/build.sh", timeout=900, idempotency_key="build-main-2026-06-18",
+    on_status=lambda s: print(format_status_line(s, verb="Building",
+                                                 show_last_line=True)),
+)
+```
+
 **Bidirectional — watch for progress from the machine:**
 ```python
 from cowork_to_code_bridge.client import detect_messages_from_claude_code
@@ -252,6 +274,9 @@ print(f"Cost optimized: {metadata['selected_model']} (fallback: {metadata['fallb
 - Always pass an **`idempotency_key`** for state-changing work (deploys,
   migrations) so retries don't double-fire.
 - **Poll, don't spin** — call `poll_task_result` on later turns, not in a tight loop.
+- While a task is `"running"`, surface `poll_task_result`'s **`status_line`** (or
+  use `call_remote_streaming`'s `on_status`) so the user sees a live spinner, not
+  silence.
 - Use **`post_message_to_cowork`** from the machine side to stream progress instead
   of going silent during long jobs.
 - Treat reads (`poll_*` / `detect_*`) as free and side-effect-free; treat
