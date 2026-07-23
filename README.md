@@ -203,6 +203,7 @@ Mostly — and the parts that need your attention are spelled out honestly below
 |---|---|---|
 | **Spend** | `max_budget_usd=2.00` — the agent stops when it hits $2.00 and reports what it got done | `BRIDGE_MAX_BUDGET_USD` |
 | **Permissions** | `permission_scope="readonly"` (also `plan`, `edit`, `full`) | `BRIDGE_PERMISSION_CEILING` |
+| **Model + effort** | `model_tier="haiku"` (also `sonnet`, `opus`, `fable`) and `effort="low"`…`"max"` — route cheap tasks to cheap models; omit both and the router's `auto_select()` heuristic picks a tier from the task text | — (a tier is a routing hint, not a spend risk; cap spend with the budget ceiling) |
 
 When both are set the stricter one wins — a Cowork task can never ask for more budget or more permission than your ceiling allows, only less. Setting `BRIDGE_MAX_BUDGET_USD` is worth doing before you share the bridge with someone who doesn't think about API costs. For fixed, predictable actions, prefer a specific script over `run_claude.sh`; for more detail see [the script](https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/examples/allowed_scripts/run_claude.sh) and the [architecture docs](https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/docs/architecture.md).
 
@@ -245,6 +246,8 @@ The install gives you these to start:
 - `hello.sh` — echoes back a greeting
 
 So from Cowork you can just say **"check my Mac's health"** or **"how much RAM am I using?"** and get real numbers back from your actual machine — the thing Cowork can't do on its own. For anything open-ended ("why is my Mac slow?"), it routes to Claude Code via `run_claude.sh` and the agent figures it out.
+
+**Tasks can ask you questions mid-flight.** A long task on your machine can pause and send a question *back* to the Cowork session — "tests pass, deploy to production?" — via `request_cowork.sh`. The Cowork side surfaces it, you answer, and the task resumes where it paused (`state="awaiting_reply"` → `reply_to_machine()` → `resume_remote()`). Timeouts are distinguishable from approvals, and parallel tasks each get their own reply.
 
 **Side benefit — run fixed actions directly.** For simple, repeatable things you don't need a whole agent for (a specific build command, a git push), you can save a small "script" and call it directly. Just ask Claude: *"I want to push my project to GitHub from here."* It writes the script, tells you where to save it, and from then on *"push my project"* just works. You never write code yourself — you're only copying its output into a file.
 
