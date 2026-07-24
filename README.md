@@ -225,20 +225,20 @@ For copy-paste examples that map Cowork requests to the bundled scripts, see
 The install gives you these to start:
 
 - `run_claude.sh` — **hands a task to Claude Code on your Mac** (the main event)
-- `mac_health.sh` — full health snapshot (CPU, memory, disk, battery, top processes)
+- `mac_health.sh` — full health snapshot (CPU, memory, disk, battery, top processes); `--json` for structured output (`host, os, uptime, load_*, cpu_usage_pct`, …)
 - `mac_ram.sh` — RAM usage (add `--json` for structured `{total,free,used}_bytes` output)
-- `mac_disk.sh` — disk space
-- `mac_top.sh` — top processes by CPU and memory
-- `mac_network.sh` — network status and connectivity
+- `mac_disk.sh` — disk space (`--json` → `{path, total_1k, used_1k, avail_1k, used_pct}`)
+- `mac_top.sh` — top processes by CPU and memory (`--json` → `{count, by_cpu[], by_mem[]}`)
+- `mac_network.sh` — network status and connectivity (`--json` → `{interfaces[], default_route, online}`)
 - `process_kill.sh` — terminate a named process or PID on your machine (refuses ambiguous name matches unless `--all`; `--json` for structured output)
-- `port_check.sh` — shows what is listening on a TCP port
-- `docker_ps.sh` — lists running Docker containers
+- `port_check.sh` — shows what is listening on a TCP port (`--json` → `{port, listening, tool, …}`)
+- `docker_ps.sh` — lists running Docker containers (`--json` → `{ok, error, containers[]}`)
 - `docker_logs.sh` — tail a container's logs (optional line count, default 50)
-- `git_status.sh` — `git status --short --branch` in any repo directory (pass the path as an argument)
-- `pkg_outdated.sh` — lists outdated packages (brew on macOS; apt/dnf/yum/pacman on Linux)
+- `git_status.sh` — `git status --short --branch` in any repo directory (pass the path as an argument; `--json` → `{branch, upstream, ahead, behind, clean, files}`)
+- `pkg_outdated.sh` — lists outdated packages (brew on macOS; apt/dnf/yum/pacman on Linux); `--json` → `{manager, count, packages[]}`
 - `list_scripts.sh` — lists every script the bridge can run, with descriptions (so Cowork can discover what's available); pass `--json` for a machine-parseable catalog
-- `env_check.sh` — shows key environment values (PATH, `BRIDGE_ROOT`, `CLAUDE_FLAGS`, `claude` CLI) without leaking your token
-- `disk_hogs.sh` — biggest files/folders in a path (pass a directory and an optional count)
+- `env_check.sh` — shows key environment values (PATH, `BRIDGE_ROOT`, `CLAUDE_FLAGS`, `claude` CLI) without leaking your token (`--json` for structured output)
+- `disk_hogs.sh` — biggest files/folders in a path (pass a directory and an optional count; `--json` → `{path, count, items[]}`)
 - `open_browser.sh` — opens an `http(s)`/localhost URL in your default browser (handy after a local dev server starts)
 - `mcp_audit.sh` — emits a JSON snapshot of the MCP servers registered in your local Claude Code so Cowork can diff them against what it can reach (spot a Postgres MCP that's local-only, etc.)
 - `request_cowork.sh` — hand a request the *other* way: from Claude Code on your machine to a Cowork session (async inbox)
