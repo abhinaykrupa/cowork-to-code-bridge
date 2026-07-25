@@ -7,7 +7,9 @@ Covers:
   - get_initialization_message() — user-friendly message
 """
 import json
+import re
 import time
+from pathlib import Path
 
 from cowork_to_code_bridge.bridge_init import (
     MARKER_NAME,
@@ -201,6 +203,42 @@ def test_get_bridge_context_covers_core_functions():
     # Common patterns
     assert "idempotency" in ctx.lower() or "idempotent" in ctx.lower()
     assert "timeout" in ctx.lower()
+
+
+def test_get_bridge_context_lists_every_installed_script():
+    """Every script install.sh lays down must appear in the bridge context.
+
+    The context is what a Cowork session loads when ``docs/`` isn't mounted into
+    the sandbox, so an undocumented script is invisible there — the agent has to
+    guess names or fall back to list_scripts.sh blind. Deriving the expected set
+    from install.sh (the thing that actually creates them) means adding a script
+    without documenting it fails here rather than silently shipping.
+    """
+    install_sh = Path(__file__).resolve().parents[1] / "install.sh"
+    installed = set(
+        re.findall(r'cat > "\$BRIDGE_ROOT/scripts/([a-z_]+\.sh)"', install_sh.read_text())
+    )
+    assert installed, "no script heredocs found in install.sh — regex is stale"
+
+    ctx = get_bridge_context()
+    missing = sorted(s for s in installed if s not in ctx)
+    assert not missing, f"scripts installed but absent from bridge context: {missing}"
+
+
+def test_bridge_init_doc_mirrors_context_script_catalog():
+    """docs/BRIDGE_INIT.md claims to be the context inlined — keep that true.
+
+    Both surfaces are read by agents (docs when mounted, the string when not).
+    Drift between them is the documented recurring failure mode here.
+    """
+    doc = (Path(__file__).resolve().parents[1] / "docs" / "BRIDGE_INIT.md").read_text()
+    install_sh = Path(__file__).resolve().parents[1] / "install.sh"
+    installed = set(
+        re.findall(r'cat > "\$BRIDGE_ROOT/scripts/([a-z_]+\.sh)"', install_sh.read_text())
+    )
+
+    missing = sorted(s for s in installed if s not in doc)
+    assert not missing, f"scripts installed but absent from BRIDGE_INIT.md: {missing}"
 
 
 def test_get_bridge_context_is_pure_function():

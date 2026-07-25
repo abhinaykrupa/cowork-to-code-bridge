@@ -588,6 +588,42 @@ timeouts. There is no network call from your side — everything moves through a
 shared bind-mounted directory (BRIDGE_ROOT) holding queue/, results/, and
 to_cowork/.
 
+## Bundled scripts
+
+The install ships these under `scripts/`. Pass the path as the first argument to
+call_remote / queue_task, e.g. `call_remote("scripts/mac_ram.sh")`. This list is
+what a stock install has; `list_scripts.sh` reports what is actually present
+(the user may have added their own).
+
+| Script | Does | Notes |
+|--------|------|-------|
+| `run_claude.sh` | Hands a task to Claude Code on the machine | The main event — a real local agent runs it. Use queue_task; these are slow. |
+| `mac_health.sh` | Full snapshot: CPU, memory, disk, battery, top procs | `--json` |
+| `mac_ram.sh` | RAM usage | `--json` → `{total,free,used}_bytes` |
+| `mac_disk.sh` | Disk space | `--json` → `{path,total_1k,used_1k,avail_1k,used_pct}` |
+| `mac_top.sh` | Top processes by CPU and memory | `--json` → `{count,by_cpu[],by_mem[]}` |
+| `mac_network.sh` | Network status and connectivity | `--json` → `{interfaces[],default_route,online}` |
+| `disk_hogs.sh` | Biggest files/folders in a path | args: dir, optional count. `--json` |
+| `port_check.sh` | What is listening on a TCP port | args: port. `--json` |
+| `process_kill.sh` | Terminate a named process or PID | SIGTERM only; refuses protected/kernel procs; `--all` for multi-match, `--json` |
+| `docker_ps.sh` | Running Docker containers | `--json` → `{ok,error,containers[]}` |
+| `docker_logs.sh` | Tail a container's logs | args: container, optional line count (default 50) |
+| `git_status.sh` | `git status --short --branch` in a repo | args: repo path. `--json` |
+| `pkg_outdated.sh` | Outdated packages (brew / apt / dnf / yum / pacman) | `--json` → `{manager,count,packages[]}` |
+| `env_check.sh` | Key env values (PATH, BRIDGE_ROOT, CLAUDE_FLAGS, `claude` CLI) | Never leaks the token. `--json` |
+| `open_browser.sh` | Opens an http(s)/localhost URL in the default browser | Handy right after a dev server starts |
+| `list_scripts.sh` | Every script this bridge can run, with descriptions | `--json` for a parseable catalog — call this to discover, don't guess |
+| `mcp_audit.sh` | JSON snapshot of MCP servers registered in local Claude Code | Diff against what you can reach from here |
+| `mcp_list_servers.sh` | Lists local MCP servers | |
+| `mcp_register.sh` | Registers an MCP server with local Claude Code | |
+| `mcp_proxy.sh` | Relays JSON-RPC to a local stdio MCP server | Lets you drive a machine-only MCP |
+| `request_cowork.sh` | Machine → Cowork request (async inbox) | The other direction; pairs with detect_messages_from_claude_code |
+| `ping.sh` | Confirms the bridge works | Start here if anything looks wrong |
+| `hello.sh` | Trivial smoke test | |
+
+Anything not on this list has to be added to the machine's script directory by
+the user first — the daemon only runs what is present there.
+
 ## Function reference
 
 ### call_remote(script, args=None, timeout=60, ...)  — BLOCKING
