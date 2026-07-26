@@ -49,6 +49,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -62,6 +63,11 @@ RESULTS = BRIDGE_ROOT / "results"
 PROCESSED = BRIDGE_ROOT / "processed"
 INFLIGHT = BRIDGE_ROOT / "inflight"
 PROGRESS = BRIDGE_ROOT / "progress"  # live <id>.log files the client can tail
+# Cancellation requests: a caller drops cancel/<id>.json to ask the daemon to
+# stop a queued or running task. Polled while a task streams, so a wedged
+# 20-minute build can be killed instead of waited out. A file here is a
+# *request*, never a result — the daemon is the only writer of results.
+CANCEL = BRIDGE_ROOT / "cancel"
 # Reverse direction (#34): requests FROM this machine (Claude Code) TO a Cowork
 # session. Async inbox — Cowork picks these up when a session is next open.
 TO_COWORK = BRIDGE_ROOT / "to_cowork"        # requests Claude Code drops for Cowork
@@ -108,6 +114,15 @@ MAX_OUTPUT_BYTES = int(os.environ.get("BRIDGE_MAX_OUTPUT_BYTES", str(64 * 1024))
 # stop appending (keeping the head, which holds the useful start-of-run context).
 MAX_PROGRESS_BYTES = int(os.environ.get("BRIDGE_MAX_PROGRESS_BYTES",
                                         str(4 * 1024 * 1024)))
+
+# ─── Cancellation ─────────────────────────────────────────────────────────────
+# How often the streaming loop checks for a cancel request, and how long the
+# child gets to exit on SIGTERM before SIGKILL. The child is started in its own
+# process group so the signal reaches the whole tree — a bare SIGTERM to the
+# shell would leave orphaned grandchildren (the `claude` process a script spawned)
+# still holding the machine.
+CANCEL_POLL_SEC = float(os.environ.get("BRIDGE_CANCEL_POLL_SEC", "0.5"))
+CANCEL_GRACE_SEC = float(os.environ.get("BRIDGE_CANCEL_GRACE_SEC", "5.0"))
 
 # Allow only relative paths inside scripts/, ending in .sh or .py.
 # Use fullmatch (not match) so the pattern must cover the ENTIRE string —
@@ -353,9 +368,67 @@ def _output_fields(out_buf: _BoundedTail, err_buf: _BoundedTail) -> dict[str, An
     return fields
 
 
+def _read_cancel_request(cmd_id: str) -> str | None:
+    """Return the cancel reason if cancel/<id>.json exists, else None.
+
+    A missing or unreadable file means "not cancelled" — cancellation must never
+    be inferred from an I/O error, or a transient read failure would kill a
+    healthy task. Malformed JSON still counts as a cancel request (the file's
+    presence is the signal; the reason is only for reporting).
+    """
+    req = CANCEL / f"{cmd_id}.json"
+    if not req.exists():
+        return None
+    try:
+        data = json.loads(req.read_text())
+        reason = data.get("reason")
+        return str(reason) if reason else "cancelled by request"
+    except (OSError, ValueError):
+        return "cancelled by request"
+
+
+def _clear_cancel_request(cmd_id: str) -> None:
+    """Drop a consumed cancel request so a recycled id can't inherit it."""
+    with contextlib.suppress(OSError):
+        (CANCEL / f"{cmd_id}.json").unlink(missing_ok=True)
+
+
+def _terminate_tree(proc: subprocess.Popen) -> None:
+    """SIGTERM the child's process group, then SIGKILL anything that ignores it.
+
+    Signals the group (not just the pid) because a bundled script typically
+    spawns further processes — `claude`, a test runner, a build — and killing
+    only the shell would leave those orphaned and still consuming the machine.
+    Falls back to killing the single process if the group signal fails (the
+    child may have already exited, or set up its own session).
+    """
+    def _signal_group(sig: int) -> bool:
+        try:
+            os.killpg(os.getpgid(proc.pid), sig)
+            return True
+        except (ProcessLookupError, PermissionError, OSError):
+            return False
+
+    if not _signal_group(signal.SIGTERM):
+        with contextlib.suppress(Exception):
+            proc.terminate()
+    try:
+        proc.wait(timeout=CANCEL_GRACE_SEC)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    # Grace expired — escalate. SIGKILL can't be caught, so this is terminal.
+    if not _signal_group(signal.SIGKILL):
+        with contextlib.suppress(Exception):
+            proc.kill()
+    with contextlib.suppress(Exception):
+        proc.wait(timeout=CANCEL_GRACE_SEC)
+
+
 def _run_streaming(argv: list[str], cwd: str, env: dict[str, str],
                    timeout: int, progress_file: Path,
-                   status_interval: float = 2.0) -> dict[str, Any]:
+                   status_interval: float = 2.0,
+                   cancel_check: Callable[[], str | None] | None = None) -> dict[str, Any]:
     """Run a subprocess, teeing stdout+stderr to progress_file line-by-line.
 
     Returns the same result dict shape as the old subprocess.run path:
@@ -435,6 +508,10 @@ def _run_streaming(argv: list[str], cwd: str, env: dict[str, str],
         proc = subprocess.Popen(
             argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, cwd=cwd, env=env, bufsize=1,
+            # Own process group: cancellation signals the whole tree. A script
+            # that spawned `claude` would otherwise survive as an orphan holding
+            # the machine after its parent shell took the SIGTERM.
+            start_new_session=True,
         )
     except Exception as e:
         return {"exit_code": -3, "error": str(e)}
@@ -456,35 +533,48 @@ def _run_streaming(argv: list[str], cwd: str, env: dict[str, str],
     t_status = threading.Thread(target=_write_status_loop, daemon=True)
     t_status.start()
 
-    try:
-        proc.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait()
+    def _finish(state: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Shared teardown: reap tees, stop the status writer, write final status."""
         t_out.join(timeout=2)
         t_err.join(timeout=2)
         # Stop status writer before writing the final status so "running" can
         # never overwrite the terminal state.
         _status_stop.set()
         t_status.join(timeout=0.5)
-        _write_status_atomic(state="error", exit_code=-2)
-        return {
-            "exit_code": -2,
-            "error": f"timeout after {timeout}s",
-            **_output_fields(out_buf, err_buf),
-        }
+        _write_status_atomic(state=state, exit_code=payload["exit_code"])
+        return {**payload, **_output_fields(out_buf, err_buf)}
 
-    t_out.join(timeout=5)
-    t_err.join(timeout=5)
-    # Stop status writer first, then write terminal state (same ordering as above).
-    _status_stop.set()
-    t_status.join(timeout=0.5)
+    # Wait in CANCEL_POLL_SEC slices rather than one blocking wait(timeout), so a
+    # cancel request lands within ~half a second instead of after the full task
+    # timeout. cancel_check is None when cancellation isn't wired (tests, or a
+    # caller that doesn't want it), in which case this degrades to a plain wait.
+    deadline = time.monotonic() + timeout
+    cancelled_reason: str | None = None
+    while True:
+        try:
+            proc.wait(timeout=CANCEL_POLL_SEC if cancel_check else timeout)
+            break
+        except subprocess.TimeoutExpired:
+            pass
+        if cancel_check:
+            cancelled_reason = cancel_check()
+            if cancelled_reason is not None:
+                _terminate_tree(proc)
+                return _finish("cancelled", {
+                    "exit_code": -5,
+                    "error": "cancelled",
+                    "cancelled": True,
+                    "cancel_reason": cancelled_reason,
+                })
+        if time.monotonic() >= deadline:
+            _terminate_tree(proc)
+            return _finish("error", {
+                "exit_code": -2,
+                "error": f"timeout after {timeout}s",
+            })
+
     final_state = "done" if proc.returncode == 0 else "error"
-    _write_status_atomic(state=final_state, exit_code=proc.returncode)
-    return {
-        "exit_code": proc.returncode,
-        **_output_fields(out_buf, err_buf),
-    }
+    return _finish(final_state, {"exit_code": proc.returncode})
 
 
 def run_one(cmd_path: Path, token_required: str | None,
@@ -759,6 +849,28 @@ def run_one(cmd_path: Path, token_required: str | None,
             else:
                 log(f"  ! ignoring invalid permission_scope={scope_raw!r}")
 
+    # ─── cancelled while queued? ──────────────────────────────────────────────
+    # Checked after validation but BEFORE the in-flight marker and any execution,
+    # so a task cancelled while it sat in the queue never runs at all. This is
+    # the cheap, fully-safe case: nothing has side-effected yet.
+    _queued_cancel = _read_cancel_request(cmd_id)
+    if _queued_cancel is not None:
+        write_result(cmd_id, {
+            "exit_code": -5,
+            "error": "cancelled",
+            "cancelled": True,
+            "cancel_reason": _queued_cancel,
+            "stdout": "",
+            "stderr": "",
+        })
+        _journal_append({"id": cmd_id, "event": "completed",
+                         "result": {"exit_code": -5, "cancelled": True}})
+        terminal[cmd_id] = "completed"
+        _clear_cancel_request(cmd_id)
+        log(f"  ⨯ {cmd_id}: cancelled before execution ({_queued_cancel})")
+        cmd_path.rename(PROCESSED / cmd_path.name)
+        return
+
     # ─── in-flight marker + journal: started ──────────────────────────────────
     # Marker is written BEFORE subprocess.run. If we crash between this point
     # and the post-run cleanup, recovery on next startup will see the marker,
@@ -775,7 +887,13 @@ def run_one(cmd_path: Path, token_required: str | None,
     # blind for the final result. The progress file is best-effort and append-
     # only; the authoritative result is still the result JSON written below.
     progress_file = PROGRESS / f"{cmd_id}.log"
-    result = _run_streaming(argv, cwd, env, timeout, progress_file)
+    result = _run_streaming(argv, cwd, env, timeout, progress_file,
+                            cancel_check=lambda: _read_cancel_request(cmd_id))
+    if result.get("cancelled"):
+        log(f"  ⨯ {cmd_id}: cancelled ({result.get('cancel_reason')})")
+    # The request has been honoured (or the task finished first) — clear it either
+    # way so a stale file can't cancel an unrelated future task.
+    _clear_cancel_request(cmd_id)
 
     # Order matters: result file first (durable), then journal completed (so
     # recovery sees terminal status), then clear in-flight marker, then move
@@ -794,7 +912,7 @@ def run_one(cmd_path: Path, token_required: str | None,
 
 
 def main() -> int:
-    for d in (BRIDGE_ROOT, QUEUE, RESULTS, PROCESSED, INFLIGHT, PROGRESS,
+    for d in (BRIDGE_ROOT, QUEUE, RESULTS, PROCESSED, INFLIGHT, PROGRESS, CANCEL,
               TO_COWORK, COWORK_RESULTS, SCRIPTS_DIR):
         d.mkdir(parents=True, exist_ok=True)
 
@@ -802,7 +920,9 @@ def main() -> int:
     # write into the queue, or drop scripts. World/group-writable here would let
     # any local user inject commands or scripts. to_cowork/ + cowork_results/ are
     # included because their request/reply files can carry the bridge token.
-    for d in (BRIDGE_ROOT, QUEUE, SCRIPTS_DIR, TO_COWORK, COWORK_RESULTS):
+    # CANCEL is included: dropping a file there stops a running task, so a
+    # world-writable cancel/ would let any local user kill the owner's work.
+    for d in (BRIDGE_ROOT, QUEUE, SCRIPTS_DIR, CANCEL, TO_COWORK, COWORK_RESULTS):
         try:
             mode = d.stat().st_mode & 0o777
             if mode & 0o077:  # any group/other bits set

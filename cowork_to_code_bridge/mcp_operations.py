@@ -19,6 +19,7 @@ can be unit-tested without a live daemon.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sys
@@ -592,29 +593,53 @@ class MCPServer:
                 "quota": self._get_quota(),
             }
 
-        # If operation in progress, best-effort: mark it for cancellation
-        # (actual SIGTERM would be handled by daemon)
+        # If the operation is in progress, write a real cancel request into
+        # cancel/<id>.json. The daemon polls that while a task streams and
+        # SIGTERMs the child's process group (then SIGKILLs after a grace
+        # period), writing an exit_code=-5 result.
+        #
+        # This used to only stamp cancelled=True onto operations/<id>.json —
+        # which no component ever read — while telling the caller "SIGTERM sent
+        # to process". Nothing was sent and nothing stopped. Reporting a kill
+        # that didn't happen is worse than reporting no kill at all, because the
+        # caller stops watching a task that is still burning budget.
+        cancel_dir = self.bridge_root / "cancel"
         ops_dir = self.bridge_root / "operations"
         op_file = ops_dir / f"{operation_id}.json"
-        if op_file.exists():
+        in_queue = (self.bridge_root / "queue" / f"{operation_id}.json").exists()
+        in_progress = (self.bridge_root / "progress" / f"{operation_id}.log").exists()
+        if op_file.exists() or in_queue or in_progress:
             try:
-                op_state = json.loads(op_file.read_text())
-                op_state["cancelled"] = True
-                op_state["cancel_reason"] = reason
-                op_state["cancelled_at"] = time.time()
-                op_file.write_text(json.dumps(op_state))
+                cancel_dir.mkdir(parents=True, exist_ok=True)
+                payload = {"id": operation_id, "reason": reason,
+                           "ts_requested": time.time()}
+                tmp = cancel_dir / f"{operation_id}.json.tmp"
+                tmp.write_text(json.dumps(payload))
+                tmp.rename(cancel_dir / f"{operation_id}.json")
+                # Keep the operations/ mirror updated for status display, but it
+                # is no longer what makes cancellation happen.
+                if op_file.exists():
+                    with contextlib.suppress(Exception):
+                        op_state = json.loads(op_file.read_text())
+                        op_state["cancelled"] = True
+                        op_state["cancel_reason"] = reason
+                        op_state["cancelled_at"] = time.time()
+                        op_file.write_text(json.dumps(op_state))
                 return {
                     "operation_id": operation_id,
                     "status": "cancelling",
                     "reason": reason,
-                    "message": "Cancellation signaled (SIGTERM sent to process)",
+                    "message": (
+                        "Cancellation requested; the daemon will signal the task "
+                        "and write an exit_code=-5 result. Poll to confirm."
+                    ),
                     "quota": self._get_quota(),
                 }
             except Exception as e:
                 return {
                     "operation_id": operation_id,
                     "status": "error",
-                    "message": f"Failed to signal cancellation: {str(e)}",
+                    "message": f"Failed to request cancellation: {str(e)}",
                 }
 
         # Unknown operation

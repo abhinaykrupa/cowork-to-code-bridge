@@ -271,6 +271,71 @@ def poll_task_result(
     }
 
 
+def cancel_task(
+    task_id: str,
+    reason: str = "cancelled by caller",
+    bridge_root: Path | str | None = None,
+) -> dict[str, Any]:
+    """Ask the daemon to stop a queued or running task.
+
+    Writes cancel/<task_id>.json, which the daemon checks before starting a task
+    and every ~0.5s while one streams. A task cancelled while still queued never
+    executes; a running one gets SIGTERM to its whole process group, then SIGKILL
+    after a grace period. The daemon then writes a normal result file with
+    exit_code=-5 and cancelled=True, so poll_task_result() reports it like any
+    other completion rather than leaving the caller hanging.
+
+    Args:
+        task_id: The task_id returned from queue_task().
+        reason: Free-text reason, recorded in the result as cancel_reason.
+        bridge_root: Override the auto-detected bridge directory.
+
+    Returns:
+        Dict with status (str):
+          "requested"      - cancel request written; poll for the -5 result
+          "already_done"   - task had already completed; nothing to cancel
+          "unknown"        - no such task in queue, progress, or results
+
+    Requesting cancellation twice is harmless — the request file is simply
+    rewritten. Cancelling an already-finished task does not alter its result.
+    """
+    root = Path(bridge_root) if bridge_root else _resolve_bridge_root()
+    cancel_dir = root / "cancel"
+
+    # Already finished? Say so rather than writing a request that can never be
+    # consumed — a stale file would otherwise sit there and could cancel a
+    # future task that happened to reuse the id.
+    if (root / "results" / f"{task_id}.json").exists():
+        return {
+            "status": "already_done",
+            "task_id": task_id,
+            "message": "Task already completed; cancellation is a no-op",
+        }
+
+    known = ((root / "queue" / f"{task_id}.json").exists()
+             or (root / "progress" / f"{task_id}.log").exists())
+    if not known:
+        return {
+            "status": "unknown",
+            "task_id": task_id,
+            "message": "Task not found in queue or progress; nothing to cancel",
+        }
+
+    cancel_dir.mkdir(parents=True, exist_ok=True)
+    payload = {"id": task_id, "reason": reason, "ts_requested": time.time()}
+    # Atomic write: the daemon treats the file's mere presence as the signal, so
+    # it must never observe a partially-written request.
+    tmp = cancel_dir / f"{task_id}.json.tmp"
+    tmp.write_text(json.dumps(payload))
+    tmp.rename(cancel_dir / f"{task_id}.json")
+    return {
+        "status": "requested",
+        "task_id": task_id,
+        "reason": reason,
+        "message": "Cancellation requested; poll_task_result() will report exit_code=-5",
+    }
+
+
 def call_remote(
     script: str,
     args: list[str | int | float] | None = None,

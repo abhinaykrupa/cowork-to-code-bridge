@@ -117,15 +117,24 @@ def test_cancellation_during_execution():
         })
 
         assert cancel_result["status"] == "cancelling"
-        assert "SIGTERM" in cancel_result["message"]
+        # This used to assert "SIGTERM" appeared in the message, which is exactly
+        # how the bug survived: the message claimed a signal was sent while no
+        # component ever sent one. Assert the observable effect instead — a real
+        # cancel request the daemon can act on.
+        cancel_req = bridge_root / "cancel" / f"{operation_id}.json"
+        assert cancel_req.exists(), (
+            "cancel must write a request the daemon polls, not only stamp a flag"
+        )
+        req = json.loads(cancel_req.read_text())
+        assert req["reason"] == "Test: cancelling during execution"
 
-        # Verify cancellation flag was set
+        # The operations/ mirror is still updated for status display.
         updated_op_state = json.loads(op_file.read_text())
         assert updated_op_state["cancelled"] is True
         assert updated_op_state["cancel_reason"] == "Test: cancelling during execution"
         assert "cancelled_at" in updated_op_state
 
-        print("✅ During-execution cancellation (SIGTERM signaled): PASS")
+        print("✅ During-execution cancellation (request written for daemon): PASS")
 
 
 def test_cancellation_idempotent():

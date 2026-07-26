@@ -8,15 +8,21 @@ from __future__ import annotations
 from .client import (
     call_remote,
     call_remote_streaming,
+    cancel_task,
     daemon_alive,
     format_status_line,
+    poll_task_result,
+    queue_task,
 )
 
 __version__ = "0.5.1"
 __all__ = [
     "call_remote",
     "call_remote_streaming",
+    "cancel_task",
     "daemon_alive",
     "format_status_line",
+    "poll_task_result",
+    "queue_task",
     "__version__",
 ]

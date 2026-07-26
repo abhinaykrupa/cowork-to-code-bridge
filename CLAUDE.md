@@ -37,12 +37,27 @@ Initialization functions live in
 | `call_remote` | yes | run and wait for result |
 | `queue_task` | no | fire-and-forget; returns `task_id` |
 | `poll_task_result` | no (idempotent) | check a queued task |
+| `cancel_task` | no (idempotent) | stop a queued/running task |
 | `post_message_to_cowork` | no | machine → Cowork update |
 | `detect_messages_from_claude_code` | no (idempotent) | read those updates |
 
 **Rule of thumb:** if work might take longer than ~30s, `queue_task` it rather
 than blocking with `call_remote`. Pass an `idempotency_key` for state-changing
 work so retries don't double-fire.
+
+**Cancelling.** `cancel_task(task_id)` writes `cancel/<id>.json`. A task cancelled
+while still queued never executes; a running one gets SIGTERM to its whole process
+group, then SIGKILL after `BRIDGE_CANCEL_GRACE_SEC` (5s). Either way the daemon
+writes a normal result with `exit_code=-5` and `cancelled: True`, so
+`poll_task_result` reports it like any other completion.
+
+**Daemon exit codes:** `-2` timeout, `-3` failed to spawn, `-4` daemon crashed
+mid-execution (never retried), `-5` cancelled.
+
+**Bounded output.** stdout/stderr are capped at `BRIDGE_MAX_OUTPUT_BYTES` (64 KiB)
+while streaming, keeping the tail. When output is dropped the result carries
+`stdout_truncated` / `stdout_total_bytes` (and the stderr pair) — absent otherwise,
+so don't treat their absence as "no output".
 
 
 ## Model-tiered delegation (hard rule — applies to every conversation, Abhi 2026-07-02)
