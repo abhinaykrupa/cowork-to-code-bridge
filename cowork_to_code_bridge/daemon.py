@@ -93,6 +93,22 @@ JOURNAL_WARN_BYTES = 10 * 1024 * 1024  # warn at 10 MB
 JOURNAL_ROTATE_BYTES = 50 * 1024 * 1024  # rotate at 50 MB (keep one .old)
 MAX_CMD_BYTES = 1 * 1024 * 1024  # reject command files larger than 1 MB (DoS guard)
 
+# ─── Output bounds (memory + disk DoS guards) ─────────────────────────────────
+# A task's stdout/stderr is capped at MAX_OUTPUT_BYTES in the result file. The
+# cap is enforced *while streaming*, not once at the end: a script emitting
+# gigabytes would otherwise fill the daemon's RAM before any final clip ran.
+# _tee keeps a bounded tail — dropping the oldest chunk as new ones arrive — so
+# resident memory stays O(MAX_OUTPUT_BYTES) regardless of how much the child
+# writes. When output is dropped, the result carries stdout_truncated /
+# stderr_truncated so a caller can tell "64 KiB of output" from "the tail of
+# 5 GB" instead of silently reading a clipped stream as complete.
+MAX_OUTPUT_BYTES = int(os.environ.get("BRIDGE_MAX_OUTPUT_BYTES", str(64 * 1024)))
+# The progress log is a best-effort live view the client tails. It is capped
+# separately so an unbounded child can't fill the disk; once over the cap we
+# stop appending (keeping the head, which holds the useful start-of-run context).
+MAX_PROGRESS_BYTES = int(os.environ.get("BRIDGE_MAX_PROGRESS_BYTES",
+                                        str(4 * 1024 * 1024)))
+
 # Allow only relative paths inside scripts/, ending in .sh or .py.
 # Use fullmatch (not match) so the pattern must cover the ENTIRE string —
 # re.match only anchors the start, fullmatch anchors both ends.
@@ -273,6 +289,70 @@ def _drain_stale_queue(terminal: dict[str, str]) -> None:
             f.rename(PROCESSED / f.name)
 
 
+class _BoundedTail:
+    """Accumulate text but keep only the last `limit` characters.
+
+    Streaming output used to be collected in an unbounded list and clipped once
+    at the end (`"".join(buf)[-65536:]`). The clip bounded the *result file* but
+    not the daemon's memory: a child emitting gigabytes filled RAM first, and
+    the tail arrived only if the process survived to produce it. This keeps the
+    same tail semantics (last `limit` chars) with resident size bounded to
+    ~2x limit, and records whether anything was dropped.
+
+    Not thread-safe by itself; each stream gets its own instance and only that
+    stream's tee thread writes to it.
+    """
+
+    __slots__ = ("_chunks", "_size", "_limit", "truncated", "total")
+
+    def __init__(self, limit: int) -> None:
+        self._chunks: list[str] = []
+        self._size = 0
+        self._limit = max(0, limit)
+        self.truncated = False
+        self.total = 0
+
+    def append(self, text: str) -> None:
+        if not text:
+            return
+        self.total += len(text)
+        self._chunks.append(text)
+        self._size += len(text)
+        # Drop whole chunks from the front while the remainder still covers the
+        # limit; then trim the new front chunk so the tail is exactly `limit`.
+        while self._chunks and self._size - len(self._chunks[0]) >= self._limit:
+            dropped = self._chunks.pop(0)
+            self._size -= len(dropped)
+            self.truncated = True
+        if self._size > self._limit and self._chunks:
+            overflow = self._size - self._limit
+            self._chunks[0] = self._chunks[0][overflow:]
+            self._size -= overflow
+            self.truncated = True
+
+    def value(self) -> str:
+        return "".join(self._chunks)[-self._limit:] if self._limit else ""
+
+
+def _output_fields(out_buf: _BoundedTail, err_buf: _BoundedTail) -> dict[str, Any]:
+    """Build the stdout/stderr result fields, flagging truncation explicitly.
+
+    `*_truncated` / `*_total_bytes` are only present when output was actually
+    dropped, so a normal result keeps its existing shape and old clients see no
+    new keys. When they ARE present, the caller can tell a genuinely small
+    output from the tail of a huge one rather than reading a clipped stream as
+    if it were complete.
+    """
+    fields: dict[str, Any] = {"stdout": out_buf.value(), "stderr": err_buf.value()}
+    if out_buf.truncated:
+        fields["stdout_truncated"] = True
+        fields["stdout_total_bytes"] = out_buf.total
+    if err_buf.truncated:
+        fields["stderr_truncated"] = True
+        fields["stderr_total_bytes"] = err_buf.total
+    return fields
+
+
 def _run_streaming(argv: list[str], cwd: str, env: dict[str, str],
                    timeout: int, progress_file: Path,
                    status_interval: float = 2.0) -> dict[str, Any]:
@@ -293,10 +373,13 @@ def _run_streaming(argv: list[str], cwd: str, env: dict[str, str],
     The status file is written atomically (tmp + rename) so readers never see
     a partial write. It is cleaned up by run_one() after the result is written.
     """
-    out_buf: list[str] = []
-    err_buf: list[str] = []
+    out_buf = _BoundedTail(MAX_OUTPUT_BYTES)
+    err_buf = _BoundedTail(MAX_OUTPUT_BYTES)
     # Shared slot: _tee updates this so the status writer has a recent line.
     last_line: list[str] = [""]
+    # Bytes written to the progress log so far, so _tee can stop at the cap.
+    progress_bytes = [0]
+    progress_capped = [False]
 
     # Truncate/create the progress file at start.
     with contextlib.suppress(OSError):
@@ -322,15 +405,28 @@ def _run_streaming(argv: list[str], cwd: str, env: dict[str, str],
             pass
 
     def _tee(stream, buf, tag):
-        # Read line-by-line; append to in-memory buffer AND the progress file.
+        # Read line-by-line; append to the bounded in-memory tail AND the
+        # progress file. Both sides are capped: buf drops its oldest content
+        # past MAX_OUTPUT_BYTES, and the progress log stops growing past
+        # MAX_PROGRESS_BYTES, so a runaway child can exhaust neither RAM nor disk.
         try:
             for line in iter(stream.readline, ""):
                 buf.append(line)
                 stripped = line.strip()
                 if stripped:
                     last_line[0] = stripped
+                if progress_bytes[0] >= MAX_PROGRESS_BYTES:
+                    if not progress_capped[0]:
+                        progress_capped[0] = True
+                        with contextlib.suppress(OSError), progress_file.open("a") as pf:
+                            pf.write(f"\n[bridge] progress log capped at "
+                                     f"{MAX_PROGRESS_BYTES} bytes; "
+                                     f"further output omitted from this live view.\n")
+                    continue
+                text = line if tag == "out" else f"[stderr] {line}"
+                progress_bytes[0] += len(text.encode("utf-8", "replace"))
                 with contextlib.suppress(OSError), progress_file.open("a") as pf:
-                    pf.write(line if tag == "out" else f"[stderr] {line}")
+                    pf.write(text)
         finally:
             with contextlib.suppress(Exception):
                 stream.close()
@@ -375,8 +471,7 @@ def _run_streaming(argv: list[str], cwd: str, env: dict[str, str],
         return {
             "exit_code": -2,
             "error": f"timeout after {timeout}s",
-            "stdout": "".join(out_buf)[-65536:],
-            "stderr": "".join(err_buf)[-65536:],
+            **_output_fields(out_buf, err_buf),
         }
 
     t_out.join(timeout=5)
@@ -388,8 +483,7 @@ def _run_streaming(argv: list[str], cwd: str, env: dict[str, str],
     _write_status_atomic(state=final_state, exit_code=proc.returncode)
     return {
         "exit_code": proc.returncode,
-        "stdout": "".join(out_buf)[-65536:],
-        "stderr": "".join(err_buf)[-65536:],
+        **_output_fields(out_buf, err_buf),
     }
 
 
