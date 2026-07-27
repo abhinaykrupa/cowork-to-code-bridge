@@ -423,7 +423,9 @@ _INTERFACE_KB: dict[str, dict[str, Any]] = {
             "poll_task_result(task_id) — idempotent status/result check",
             "call_remote(script, ...) — blocking; only for quick (<30s) work",
             "detect_messages_from_claude_code(parent_task_id=...) — read updates",
+            "cancel_task(task_id) — idempotent; stops a queued or running task",
             "Always pass idempotency_key for state-changing work",
+            "Cap open-ended work with max_budget_usd; tighten with permission_scope",
         ],
         "examples": (
             "from cowork_to_code_bridge.client import queue_task, poll_task_result\n"
@@ -681,6 +683,45 @@ format_status_line(status, verb="Building", show_last_line=True) for a
 spinner/elapsed ticker. Same result dict and idempotency guarantees as
 call_remote. Use for builds and test runs where waiting blind is unacceptable.
 
+### cancel_task(task_id, reason="cancelled by caller")  — NON-BLOCKING, IDEMPOTENT
+Stop a queued or running task. A task cancelled while still queued never runs; a
+running one gets SIGTERM to its whole process group, then SIGKILL after
+BRIDGE_CANCEL_GRACE_SEC (5s). Either way the daemon writes a normal result with
+exit_code=-5 and cancelled=True, so poll_task_result reports it like any other
+completion. Safe to call twice, or on an already-finished task.
+
+## Per-task controls (call_remote and queue_task both accept these)
+
+All four are optional. Each is a *request* — an owner-set global (CLAUDE_FLAGS,
+BRIDGE_MAX_BUDGET_USD) always wins, so a caller can tighten but never widen what
+the machine's owner allowed.
+
+### max_budget_usd=2.00
+Stop the agent once it has spent that much on a single task. The owner's
+BRIDGE_MAX_BUDGET_USD is a hard ceiling; when both are set the lower one applies.
+Use it on anything open-ended so a runaway agent can't drain credits.
+
+### permission_scope="readonly"
+Restrict what the task may do, chosen from a fixed allowlist (arbitrary CLI flags
+are deliberately not accepted — the bridge token would otherwise grant full shell):
+
+| Scope      | The task may                          |
+|------------|---------------------------------------|
+| "plan"     | read and reason only; no edits, no shell |
+| "readonly" | inspect files (Read/Glob/Grep)        |
+| "edit"     | read and edit files, but not run shell |
+| "full"     | default trust — no extra restriction   |
+
+### model_tier="sonnet"
+Pick the model the machine's Claude Code runs: "haiku" (triage, summaries),
+"sonnet" (default — coding, tests, refactors), "opus" (multi-file design, tricky
+debugging), or "fable". Omit it to let the CLI use its default.
+
+### effort="high"
+Reasoning effort: "low", "medium", "high", "xhigh", or "max". Lower is faster and
+cheaper. Omit it to let the CLI decide. If you don't want to choose model_tier and
+effort yourself, describe the task and let the router pick both.
+
 ### post_message_to_cowork(message_type, content, parent_task_id=None)
 Used by Claude Code (machine side) to push a structured update back to Cowork:
 message_type ∈ {"progress","completed","error","info"}. Returns a request_id.
@@ -697,6 +738,8 @@ Returns a list (empty if none). Safe to poll.
 | Long build/test, or short timeout      | queue_task + poll_task_result    |
 | Watch a long task's output live        | call_remote_streaming            |
 | Avoid duplicate runs on retry          | queue_task(idempotency_key=...)  |
+| Stop a task already queued/running     | cancel_task(task_id)             |
+| Choose the model / reasoning depth     | model_tier=..., effort=...       |
 | Cap what a task can cost               | max_budget_usd=2.00              |
 | Limit what a task may change           | permission_scope="readonly"      |
 | Get a human to approve first           | plan="what this will do"         |

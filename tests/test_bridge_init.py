@@ -367,3 +367,51 @@ def test_marker_survives_repeated_checks(tmp_path):
     # Marker file should not have been rewritten
     final_mtime = marker.stat().st_mtime
     assert original_mtime == final_mtime
+
+
+# ---------------------------------------------------------------------------
+# Docs drift: every per-task control the client accepts must be discoverable in
+# the context agents actually load. Features have shipped in client.py before
+# without ever reaching get_bridge_context(), leaving callers unable to find
+# them. Deriving the list from the real signature means a new parameter fails
+# here until it is documented, rather than silently going unmentioned.
+# ---------------------------------------------------------------------------
+
+# Plumbing/transport args, documented elsewhere or not caller-facing knobs.
+_UNDOCUMENTED_OK = {
+    "script", "args", "timeout", "cwd", "env", "bridge_root",
+    "idempotency_key", "plan",
+}
+
+
+def test_queue_task_controls_are_documented_in_bridge_context():
+    """Each optional control on queue_task appears in the loaded context."""
+    import inspect
+
+    from cowork_to_code_bridge.client import queue_task
+
+    ctx = get_bridge_context()
+    params = set(inspect.signature(queue_task).parameters) - _UNDOCUMENTED_OK
+    assert params, "signature introspection found no controls — test is stale"
+
+    undocumented = sorted(p for p in params if p not in ctx)
+    assert not undocumented, (
+        f"shipped but absent from get_bridge_context(): {undocumented}. "
+        "Document them in the context string so agents can discover them."
+    )
+
+
+def test_permission_scope_values_are_documented():
+    """Every allowlisted scope is named, so callers can pick the right one."""
+    from cowork_to_code_bridge.model_router import PermissionScope
+
+    ctx = get_bridge_context()
+    missing = sorted(s.value for s in PermissionScope if s.value not in ctx)
+    assert not missing, f"permission scopes not documented: {missing}"
+
+
+def test_cancel_task_is_documented():
+    """cancel_task and its distinctive exit code are discoverable."""
+    ctx = get_bridge_context()
+    assert "cancel_task" in ctx
+    assert "-5" in ctx, "cancellation exit code should be documented"
