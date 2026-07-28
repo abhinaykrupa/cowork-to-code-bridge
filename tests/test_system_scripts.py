@@ -1227,11 +1227,10 @@ exit 1
 
 # ── approve_plan.sh — plan-approval gate ─────────────────────────────────────
 #
-# approve_plan.sh is installed by install.sh alongside the other scripts, so the
-# path bridge_init.py points owners at actually exists after a fresh install.
-# Installing it does NOT turn on a gate: as shipped it approves everything, and
-# the owner opts in by uncommenting a policy section. It
-# reads the plan on stdin and, as shipped, is a no-op that (1) always exits 0
+# approve_plan.sh ships in examples/allowed_scripts/ only — install.sh must NOT
+# create it, because daemon.py enables the plan gate on the file's mere presence
+# (see INSTALL_SH_EXEMPT below). It's an opt-in gate the owner copies in by hand.
+# It reads the plan on stdin and, as shipped, is a no-op that (1) always exits 0
 # ("approve everything") and (2) appends one JSON line per plan to
 # $BRIDGE_ROOT/plan_log.jsonl. These tests lock in that shipped contract so a
 # future edit can't silently turn the default gate into a rejecter or corrupt
@@ -1321,11 +1320,21 @@ def test_approve_plan_empty_stdin_approves(
 # ── install.sh ↔ examples/allowed_scripts/ parity ────────────────────────────
 #
 # examples/allowed_scripts/ is the canonical catalog; install.sh is what a
-# curl|bash user actually receives. These drifted apart before: approve_plan.sh
-# and escalate_to_claude.sh sat in the catalog (and approve_plan.sh was named in
-# bridge_init.py's guidance) while no install ever created them. The check below
-# compares the two SETS rather than asserting on any one name, so adding a script
-# to the catalog without an install.sh heredoc fails here instead of shipping.
+# curl|bash user actually receives. escalate_to_claude.sh sat in the catalog
+# while no install ever created it. The check below compares the two SETS rather
+# than asserting on any one name, so adding a script to the catalog without an
+# install.sh heredoc fails here instead of shipping.
+#
+# INSTALL_SH_EXEMPT holds the deliberate exceptions. approve_plan.sh must NOT be
+# installed: daemon.py treats the file's mere PRESENCE as the on-switch for the
+# plan gate (see the `approve_hook.exists()` check), so shipping it would opt
+# every install into running a bash+python hook — and appending to
+# plan_log.jsonl — on every task carrying a plan, and a failure inside that hook
+# blocks execution. Absence is the documented safe default; owners copy it in by
+# hand to turn the gate on.
+INSTALL_SH_EXEMPT = {
+    "approve_plan.sh": "presence enables the plan gate — must stay opt-in (daemon.py)",
+}
 
 
 def _installed_script_names() -> set[str]:
@@ -1344,11 +1353,33 @@ def test_install_sh_creates_every_catalog_script() -> None:
     installed = _installed_script_names()
 
     assert catalog, "examples/allowed_scripts/ has no scripts — bad test setup"
-    missing = catalog - installed
+    missing = catalog - installed - set(INSTALL_SH_EXEMPT)
     assert not missing, (
         "scripts in examples/allowed_scripts/ that install.sh never creates "
         f"(a real install would not have them): {sorted(missing)}"
     )
+
+
+def test_install_sh_exemptions_are_really_absent() -> None:
+    """An exempt script must stay OUT of install.sh — the exemption is the point.
+
+    approve_plan.sh is the live case: daemon.py enables the plan gate purely
+    because the file exists, so re-adding it to install.sh would silently turn
+    the gate on for every installed bridge.
+    """
+    installed = _installed_script_names()
+    wrongly_installed = sorted(set(INSTALL_SH_EXEMPT) & installed)
+    assert not wrongly_installed, (
+        "these scripts are install-exempt on purpose but install.sh now creates "
+        f"them: {[(n, INSTALL_SH_EXEMPT[n]) for n in wrongly_installed]}"
+    )
+
+
+def test_install_sh_exemptions_still_exist_in_catalog() -> None:
+    """Exempting a script only makes sense while it still ships in examples/."""
+    catalog = {p.name for p in (REPO_ROOT / "examples" / "allowed_scripts").glob("*.sh")}
+    stale = sorted(set(INSTALL_SH_EXEMPT) - catalog)
+    assert not stale, f"exempt scripts no longer in the catalog — drop them: {stale}"
 
 
 def test_install_sh_creates_no_unknown_scripts() -> None:
@@ -1388,7 +1419,7 @@ def test_installed_scripts_are_chmod_executable() -> None:
 
 @pytest.mark.parametrize(
     ("script_name", "marker"),
-    [("approve_plan.sh", "APPROVEPLAN"), ("escalate_to_claude.sh", "ESCALATE")],
+    [("escalate_to_claude.sh", "ESCALATE")],
 )
 def test_newly_installed_scripts_match_canonical_copy(
     script_name: str, marker: str

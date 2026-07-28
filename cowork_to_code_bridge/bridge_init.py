@@ -656,10 +656,11 @@ what a stock install has; `list_scripts.sh` reports what is actually present
     non-Cowork daemon) handing work to a Claude Code / Cowork session. Args:
     escalation text, optional `--wait SECONDS` to block for a reply.
 `approve_plan.sh`
-    Plan-approval gate the daemon runs before any task carrying a `plan` field
-    (plan text on stdin; exit 0 approves, exit 2 rejects and the reason comes
-    back to Cowork). Ships approving everything and logging each plan to
-    plan_log.jsonl — the owner edits it to enforce a policy.
+    NOT installed by default — opt-in. The daemon runs it before any task
+    carrying a `plan` field only if the owner has copied it into the scripts
+    directory (plan text on stdin; exit 0 approves, exit 2 rejects and the
+    reason comes back to Cowork). Absence means plan fields are ignored, which
+    is the default. Template: examples/allowed_scripts/approve_plan.sh.
 
 Anything not on this list has to be added to the machine's script directory by
 the user first — the daemon only runs what is present there.

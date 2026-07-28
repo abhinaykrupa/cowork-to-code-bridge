@@ -59,7 +59,7 @@ what a stock install has; `list_scripts.sh` reports what is *actually* present
 | `mcp_proxy.sh` | Relays JSON-RPC to a local stdio MCP server | Lets you drive a machine-only MCP |
 | `request_cowork.sh` | Machine → Cowork request (async inbox) | The other direction; pairs with `detect_messages_from_claude_code` |
 | `escalate_to_claude.sh` | External agent (cron, CI, daemon) → Cowork request | Same inbox as `request_cowork.sh`; args: text, optional `--wait SECONDS` |
-| `approve_plan.sh` | Plan-approval gate run before any task with a `plan` field | Plan on stdin; exit 0 approves, 2 rejects. Ships approving everything + logging to `plan_log.jsonl` |
+| `approve_plan.sh` | Plan-approval gate run before any task with a `plan` field | **Not installed by default — opt-in.** Copy it in to enable; absence means `plan` is ignored. Plan on stdin; exit 0 approves, 2 rejects |
 | `ping.sh` | Confirms the bridge works | Start here if anything looks wrong |
 | `hello.sh` | Trivial smoke test | |
 
