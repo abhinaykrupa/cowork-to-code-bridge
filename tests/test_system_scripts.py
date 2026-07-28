@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 import platform
+import re
 import subprocess
 from pathlib import Path
 
@@ -1225,8 +1227,10 @@ exit 1
 
 # ── approve_plan.sh — plan-approval gate ─────────────────────────────────────
 #
-# approve_plan.sh ships in examples/allowed_scripts/ only (no install.sh heredoc,
-# no bridge/scripts copy — it's an opt-in gate the owner copies in by hand). It
+# approve_plan.sh is installed by install.sh alongside the other scripts, so the
+# path bridge_init.py points owners at actually exists after a fresh install.
+# Installing it does NOT turn on a gate: as shipped it approves everything, and
+# the owner opts in by uncommenting a policy section. It
 # reads the plan on stdin and, as shipped, is a no-op that (1) always exits 0
 # ("approve everything") and (2) appends one JSON line per plan to
 # $BRIDGE_ROOT/plan_log.jsonl. These tests lock in that shipped contract so a
@@ -1312,3 +1316,89 @@ def test_approve_plan_empty_stdin_approves(
     assert result.returncode == 0, result.stderr
     entry = json.loads((tmp_path / "plan_log.jsonl").read_text().strip())
     assert entry["plan"] == ""
+
+
+# ── install.sh ↔ examples/allowed_scripts/ parity ────────────────────────────
+#
+# examples/allowed_scripts/ is the canonical catalog; install.sh is what a
+# curl|bash user actually receives. These drifted apart before: approve_plan.sh
+# and escalate_to_claude.sh sat in the catalog (and approve_plan.sh was named in
+# bridge_init.py's guidance) while no install ever created them. The check below
+# compares the two SETS rather than asserting on any one name, so adding a script
+# to the catalog without an install.sh heredoc fails here instead of shipping.
+
+
+def _installed_script_names() -> set[str]:
+    """Script names install.sh actually writes into $BRIDGE_ROOT/scripts/."""
+    return set(
+        re.findall(
+            r'^cat > "\$BRIDGE_ROOT/scripts/([A-Za-z0-9_.-]+\.sh)" <<',
+            INSTALL_SH.read_text(),
+            re.MULTILINE,
+        )
+    )
+
+
+def test_install_sh_creates_every_catalog_script() -> None:
+    catalog = {p.name for p in (REPO_ROOT / "examples" / "allowed_scripts").glob("*.sh")}
+    installed = _installed_script_names()
+
+    assert catalog, "examples/allowed_scripts/ has no scripts — bad test setup"
+    missing = catalog - installed
+    assert not missing, (
+        "scripts in examples/allowed_scripts/ that install.sh never creates "
+        f"(a real install would not have them): {sorted(missing)}"
+    )
+
+
+def test_install_sh_creates_no_unknown_scripts() -> None:
+    """Every script install.sh writes must have a canonical copy to diff against."""
+    catalog = {p.name for p in (REPO_ROOT / "examples" / "allowed_scripts").glob("*.sh")}
+    extra = _installed_script_names() - catalog
+    assert not extra, (
+        "install.sh creates scripts with no examples/allowed_scripts/ counterpart: "
+        f"{sorted(extra)}"
+    )
+
+
+def test_installed_scripts_are_chmod_executable() -> None:
+    """Each created script is also made executable — otherwise it can't be run.
+
+    install.sh chmods some scripts individually and others in shared batch lines
+    (including a `scripts/mac_*.sh` glob), so collect every `chmod +x` line and
+    ask whether each script is covered by a literal mention or a matching glob.
+    """
+    text = INSTALL_SH.read_text()
+    chmod_lines = [ln for ln in text.splitlines() if ln.lstrip().startswith("chmod +x")]
+    assert chmod_lines, "install.sh has no `chmod +x` lines at all"
+
+    def _is_chmodded(name: str) -> bool:
+        for line in chmod_lines:
+            if name in line:
+                return True
+            # A glob like "$BRIDGE_ROOT"/scripts/mac_*.sh covers mac_ram.sh etc.
+            for match in re.findall(r'scripts/([A-Za-z0-9_.-]*\*[A-Za-z0-9_.-]*)', line):
+                if fnmatch.fnmatch(name, match):
+                    return True
+        return False
+
+    missing = [n for n in sorted(_installed_script_names()) if not _is_chmodded(n)]
+    assert not missing, f"created but never chmod +x: {missing}"
+
+
+@pytest.mark.parametrize(
+    ("script_name", "marker"),
+    [("approve_plan.sh", "APPROVEPLAN"), ("escalate_to_claude.sh", "ESCALATE")],
+)
+def test_newly_installed_scripts_match_canonical_copy(
+    script_name: str, marker: str
+) -> None:
+    """The install.sh heredoc must be byte-identical to the canonical copy."""
+    embedded = _extract_script(script_name, marker)
+    canonical = (REPO_ROOT / "examples" / "allowed_scripts" / script_name).read_text()
+    if not canonical.endswith("\n"):
+        canonical += "\n"
+    assert embedded == canonical, (
+        f"{script_name} in install.sh has drifted from "
+        f"examples/allowed_scripts/{script_name}"
+    )

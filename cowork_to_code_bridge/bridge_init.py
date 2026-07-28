@@ -651,6 +651,15 @@ what a stock install has; `list_scripts.sh` reports what is actually present
 `request_cowork.sh`
     Machine → Cowork request (async inbox). The other direction; pairs with
     detect_messages_from_claude_code.
+`escalate_to_claude.sh`
+    Same inbox as request_cowork.sh, but for an external agent (cron, CI, a
+    non-Cowork daemon) handing work to a Claude Code / Cowork session. Args:
+    escalation text, optional `--wait SECONDS` to block for a reply.
+`approve_plan.sh`
+    Plan-approval gate the daemon runs before any task carrying a `plan` field
+    (plan text on stdin; exit 0 approves, exit 2 rejects and the reason comes
+    back to Cowork). Ships approving everything and logging each plan to
+    plan_log.jsonl — the owner edits it to enforce a policy.
 
 Anything not on this list has to be added to the machine's script directory by
 the user first — the daemon only runs what is present there.
