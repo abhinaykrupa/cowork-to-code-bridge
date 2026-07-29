@@ -17,7 +17,7 @@
 **Let Claude run code on your real machine — safely — from any Claude chat. Integrate with Hermes, cron jobs, CI/CD, or any daemon.**
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/abhinaykrupa/cowork-to-code-bridge/main/docs/demo.svg" alt="Cowork hands a 'build me a Flask app' task to Claude Code on your machine; it scaffolds, installs, runs, and verifies it — then reports back." width="100%">
+  <img src="https://raw.githubusercontent.com/abhinaykrupa/cowork-to-code-bridge/main/docs/demo.gif" alt="Cowork hands a 'build me a Flask app' task to Claude Code on your machine; it scaffolds, installs, runs, and verifies it — then reports back." width="100%">
 </p>
 
 > 🖥️ **macOS, Linux, and WSL2.** Works on your Mac (launchd), a Linux box/server (systemd, or a [manual path](https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/docs/LINUX-NO-SYSTEMD.md) for containers/minimal distros), or **Windows via WSL2** (systemd in Ubuntu). Native Windows isn't supported yet — see [docs/WSL.md](https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/docs/WSL.md).

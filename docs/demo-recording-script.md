@@ -26,5 +26,13 @@ machine → result comes back. Replace `docs/demo.svg` with the exported GIF/MP4
 
 ## After recording
 1. Save as `docs/demo.gif`.
-2. In README, swap the `<img src="./docs/demo.svg">` for `./docs/demo.gif`.
-3. Delete `docs/demo.svg` (it was the placeholder).
+2. In README, point the hero `<img>` at `docs/demo.gif`.
+
+**Status: done.** The recording landed in `docs/demo.gif` (860×520, 37 frames)
+and the README hero points at it. `docs/demo.svg` is kept as the fallback
+still — it is no longer referenced by the README, but it stays in the repo so
+the pre-recording placeholder is available if the GIF ever needs re-cutting.
+
+`tests/test_readme_demo_asset.py` guards the wiring: the hero image must
+reference an asset that actually exists in `docs/`, so the README can't drift
+back to pointing at a placeholder (or at a file nobody committed).
