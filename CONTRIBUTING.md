@@ -5,7 +5,18 @@ are welcome and triaged best-effort.
 
 ## New here?
 
+Here's what you're contributing to — one message in a Claude chat, and a real
+Claude Code agent scaffolds, installs, runs, and verifies an app on the machine:
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/abhinaykrupa/cowork-to-code-bridge/main/docs/demo.gif" alt="A Cowork chat hands a 'build me a Flask app' task to Claude Code on a local machine; the agent scaffolds the app, installs dependencies, starts the server, curls the route, and reports back." width="100%">
+</p>
+
 Start with a [good first issue →](https://github.com/abhinaykrupa/cowork-to-code-bridge/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
+
+Want to re-cut that clip, or record a terminal-only asciinema version? The exact
+shot list lives in [`docs/demo-recording-script.md`](docs/demo-recording-script.md)
+— docs/media contribution, no code required.
 
 ## Ground rules
 
