@@ -13,7 +13,7 @@ the [architecture doc](docs/architecture.md) has the full detail.
 | ✅ Runs **as you, never `sudo`** | The daemon uses your normal user permissions — it can't escalate, can't read other users' files, can't touch anything you couldn't touch yourself. |
 | ✅ **No inbound network listener** | The bridge opens **no ports**. Nothing on the network — local or remote — can connect to it. It only watches a folder on disk. |
 | ✅ **Token-gated** | A random 32-char token is generated at install (`chmod 600`, only you can read it) and compared with `hmac.compare_digest`. Requests without the right token are rejected. |
-| ✅ **Bounded** | Per-task timeout (default 60s, cap 10min), 64 KB stdout/stderr truncation, 1 MB command-size cap. Runaway tasks are killed; huge outputs can't fill your disk. |
+| ✅ **Bounded** | Per-task timeout (default 60s, cap 10min), max queue age (`BRIDGE_MAX_TASK_AGE_SEC`, default 1h), 64 KB stdout/stderr truncation, 1 MB command-size cap. Runaway tasks are killed; huge outputs can't fill your disk; a task that sat in the queue too long is skipped with `exit_code=-6` rather than executing hours late when the daemon wakes up. |
 | ✅ **One-command, complete uninstall** | `cowork-to-code-bridge-uninstall` removes the daemon, service registration, scripts folder, and skill. Nothing is left behind. |
 | ⚠️ **`run_claude.sh` hands a full agent your machine's access** | The headline script runs a real Claude Code agent that *can* edit, commit, and push. That's the power you want — but scope it with `CLAUDE_FLAGS` (e.g. plan-only, tool allowlist) or the optional [`approve_plan.sh`](examples/allowed_scripts/approve_plan.sh) gate if you want a hard limit. |
 

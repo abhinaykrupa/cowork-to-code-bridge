@@ -52,7 +52,17 @@ writes a normal result with `exit_code=-5` and `cancelled: True`, so
 `poll_task_result` reports it like any other completion.
 
 **Daemon exit codes:** `-2` timeout, `-3` failed to spawn, `-4` daemon crashed
-mid-execution (never retried), `-5` cancelled.
+mid-execution (never retried), `-5` cancelled, `-6` expired in the queue.
+
+**Expiry.** `timeout` bounds how long a task *runs*; `max_age_sec` bounds how
+long it may *wait*. If the daemon is down (asleep, rebooted) the backlog would
+otherwise all execute on restart — hours late, after the caller gave up, which
+for a "deploy" or "push" is worse than never running. Past `now - ts_submitted >
+max_age`, the daemon skips execution and writes a normal result with
+`exit_code=-6` and `cancelled`-style `expired: True`. The owner's
+`BRIDGE_MAX_TASK_AGE_SEC` (default 3600s, `0` disables) is a ceiling a caller can
+only tighten. A missing or unparseable `ts_submitted` fails *open* — never
+expired — so an older client keeps working.
 
 **Bounded output.** stdout/stderr are capped at `BRIDGE_MAX_OUTPUT_BYTES` (64 KiB)
 while streaming, keeping the tail. When output is dropped the result carries

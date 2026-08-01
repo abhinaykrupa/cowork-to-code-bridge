@@ -78,11 +78,20 @@ def queue_task(
     permission_scope: str | None = None,
     model_tier: str | None = None,
     effort: str | None = None,
+    max_age_sec: float | None = None,
 ) -> dict[str, Any]:
     """Queue a task WITHOUT waiting for result (async, non-blocking).
 
     Args:
-        Same as call_remote, but returns immediately after queuing.
+        Same as call_remote, but returns immediately after queuing, plus:
+        max_age_sec: how long this task may sit in the queue before the daemon
+            refuses to run it. `timeout` bounds execution; this bounds waiting.
+            Matters when the daemon is down (asleep, rebooted) and the queue
+            drains late — an expired task is skipped rather than executed hours
+            after you asked. The daemon clamps this to its own
+            BRIDGE_MAX_TASK_AGE_SEC ceiling (default 3600s), so this can only
+            make expiry stricter, never looser. Expired tasks come back through
+            poll_task_result with exit_code=-6 and expired=True.
 
     Returns:
         Dict with keys: task_id (str), status (str "queued"), timestamp (float).
@@ -119,6 +128,8 @@ def queue_task(
         payload["model_tier"] = str(model_tier).strip().lower()
     if effort is not None:
         payload["effort"] = str(effort).strip().lower()
+    if max_age_sec is not None:
+        payload["max_age_sec"] = float(max_age_sec)
 
     token = _load_token(root)
     if token:

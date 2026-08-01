@@ -124,6 +124,23 @@ MAX_PROGRESS_BYTES = int(os.environ.get("BRIDGE_MAX_PROGRESS_BYTES",
 CANCEL_POLL_SEC = float(os.environ.get("BRIDGE_CANCEL_POLL_SEC", "0.5"))
 CANCEL_GRACE_SEC = float(os.environ.get("BRIDGE_CANCEL_GRACE_SEC", "5.0"))
 
+# ─── Task expiry (#77) ────────────────────────────────────────────────────────
+# `timeout` bounds how long a task may *run*; nothing bounded how long it may
+# *wait*. If the daemon is down (laptop asleep, reboot, crash) tasks pile up in
+# queue/ and all execute on restart — possibly hours later, long after the
+# caller gave up. For a state-changing task ("deploy", "push the branch") that
+# late execution is worse than never running at all.
+#
+# So a task also carries a max age: now - ts_submitted. Past it, the daemon
+# skips execution and writes a normal result with exit_code=-6, so an expired
+# task reports through poll_task_result like any other completion rather than
+# vanishing. Per-task `max_age_sec` overrides the default; 0 means no expiry
+# (the pre-#77 behaviour, kept so anyone relying on it can opt back in).
+#
+# Wall clock, not monotonic: this bound has to survive a reboot, which is the
+# exact case it exists for. Clock skew is acceptable because the bound is coarse.
+MAX_TASK_AGE_SEC = float(os.environ.get("BRIDGE_MAX_TASK_AGE_SEC", "3600"))
+
 # Allow only relative paths inside scripts/, ending in .sh or .py.
 # Use fullmatch (not match) so the pattern must cover the ENTIRE string —
 # re.match only anchors the start, fullmatch anchors both ends.
@@ -302,6 +319,54 @@ def _drain_stale_queue(terminal: dict[str, str]) -> None:
         if terminal.get(f.stem):
             log(f"   recovery: {f.stem} already terminal in journal, archiving")
             f.rename(PROCESSED / f.name)
+
+
+def _task_max_age(cmd: dict) -> float:
+    """Effective max age for a command: per-task override, else the default.
+
+    A caller may only make expiry *stricter* than the owner's default, never
+    looser — same one-way clamp as the budget and permission ceilings. Otherwise
+    any caller could send max_age_sec=0 and opt itself out of the bound entirely.
+    A non-numeric or negative value falls back to the default rather than
+    disabling expiry, so a typo can't silently un-bound a task.
+    """
+    raw = cmd.get("max_age_sec")
+    if raw is None:
+        return MAX_TASK_AGE_SEC
+    try:
+        requested = float(raw)
+    except (TypeError, ValueError):
+        return MAX_TASK_AGE_SEC
+    if requested < 0:
+        return MAX_TASK_AGE_SEC
+    if MAX_TASK_AGE_SEC <= 0:
+        # No owner default: the caller's own bound is the only one there is.
+        return requested
+    if requested == 0:
+        # Caller asked for "no expiry" but the owner set a bound — owner wins.
+        return MAX_TASK_AGE_SEC
+    return min(requested, MAX_TASK_AGE_SEC)
+
+
+def _task_age_sec(cmd: dict) -> float | None:
+    """Seconds since the client stamped `ts_submitted`, or None if unknowable.
+
+    None (missing/garbage/absurd timestamp) means "cannot determine age", and
+    the caller treats that as not-expired: an older client that predates the
+    stamp must keep working rather than have every task rejected. A timestamp
+    in the future — clock skew between sandbox and host — clamps to age 0 for
+    the same reason.
+    """
+    raw = cmd.get("ts_submitted")
+    if raw is None:
+        return None
+    try:
+        submitted = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if submitted <= 0:
+        return None
+    return max(0.0, time.time() - submitted)
 
 
 class _BoundedTail:
@@ -615,6 +680,30 @@ def run_one(cmd_path: Path, token_required: str | None,
         "idempotency_key": idem_key,
         "script": cmd.get("script"),
     })
+
+    # ─── expiry gate (#77) ────────────────────────────────────────────────────
+    # Checked before the idempotency short-circuit and before any execution: a
+    # task that waited too long must not run, and must not serve a cached result
+    # under a key whose caller has long since gone. Runs after auth so an
+    # unauthenticated file still can't learn anything, and after the journal
+    # `received` event so an expiry is traceable to a real submission.
+    max_age = _task_max_age(cmd)
+    age = _task_age_sec(cmd)
+    if max_age > 0 and age is not None and age > max_age:
+        write_result(cmd_id, {
+            "exit_code": -6,
+            "expired": True,
+            "age_sec": round(age, 3),
+            "max_age_sec": max_age,
+            "error": (f"task expired: queued {age:.0f}s ago, exceeds max age "
+                      f"{max_age:.0f}s; not executed"),
+        })
+        _journal_append({"id": cmd_id, "event": "expired",
+                         "age_sec": round(age, 3), "max_age_sec": max_age})
+        terminal[cmd_id] = "expired"
+        log(f"  ⏲ {cmd_id}: expired ({age:.0f}s old > {max_age:.0f}s), not executed")
+        cmd_path.rename(PROCESSED / cmd_path.name)
+        return
 
     # ─── idempotency short-circuit ────────────────────────────────────────────
     if idem_key and idem_key in idem_cache:

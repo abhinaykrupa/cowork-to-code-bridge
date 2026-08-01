@@ -732,6 +732,21 @@ Reasoning effort: "low", "medium", "high", "xhigh", or "max". Lower is faster an
 cheaper. Omit it to let the CLI decide. If you don't want to choose model_tier and
 effort yourself, describe the task and let the router pick both.
 
+### max_age_sec=900  (queue_task only)
+How long the task may WAIT in the queue before the daemon refuses to run it.
+`timeout` bounds how long a task RUNS; this bounds how long it sits unstarted.
+It matters when the daemon is down — laptop asleep, rebooted, crashed — and the
+backlog drains later: without it, a task queued hours ago still executes once the
+daemon comes back, long after you gave up on it. For anything state-changing
+("deploy", "push the branch", "restart the service") running that late is worse
+than not running at all.
+
+Past its age the task is skipped and the daemon writes a normal result with
+exit_code=-6 and expired=True, so poll_task_result reports it like any other
+completion rather than the task silently vanishing. The owner's
+BRIDGE_MAX_TASK_AGE_SEC (default 3600s, 0 disables) is the ceiling — this can
+only make expiry stricter, never looser. Omit it to take the owner's default.
+
 ### post_message_to_cowork(message_type, content, parent_task_id=None)
 Used by Claude Code (machine side) to push a structured update back to Cowork:
 message_type ∈ {"progress","completed","error","info"}. Returns a request_id.
@@ -749,6 +764,7 @@ Returns a list (empty if none). Safe to poll.
 | Watch a long task's output live        | call_remote_streaming            |
 | Avoid duplicate runs on retry          | queue_task(idempotency_key=...)  |
 | Stop a task already queued/running     | cancel_task(task_id)             |
+| Don't run it if it waited too long     | queue_task(max_age_sec=900)      |
 | Choose the model / reasoning depth     | model_tier=..., effort=...       |
 | Cap what a task can cost               | max_budget_usd=2.00              |
 | Limit what a task may change           | permission_scope="readonly"      |
