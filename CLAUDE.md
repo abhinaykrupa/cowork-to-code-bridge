@@ -64,6 +64,15 @@ max_age`, the daemon skips execution and writes a normal result with
 only tighten. A missing or unparseable `ts_submitted` fails *open* — never
 expired — so an older client keeps working.
 
+**Redaction.** Task output is scrubbed on the write path — result file, progress
+log, and status line all live under `BRIDGE_ROOT`, so all three are covered. The
+daemon's own `BRIDGE_TOKEN` is redacted with certainty; vendor key prefixes,
+`Authorization:` headers, inline URL passwords, private-key blocks, and long
+values assigned to key-ish names are matched heuristically. Secrets become
+`[redacted:<kind>]` (ASCII, so `json.dumps` doesn't escape it). `BRIDGE_REDACT=0`
+disables it for debugging. **Best-effort:** an unrecognised secret shape, or one
+split across two lines, passes through — see SECURITY.md.
+
 **Bounded output.** stdout/stderr are capped at `BRIDGE_MAX_OUTPUT_BYTES` (64 KiB)
 while streaming, keeping the tail. When output is dropped the result carries
 `stdout_truncated` / `stdout_total_bytes` (and the stderr pair) — absent otherwise,

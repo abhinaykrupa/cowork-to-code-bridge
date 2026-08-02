@@ -224,6 +224,33 @@ See BRIDGE_INIT.md for routing requirements.
 
 ---
 
+## 6b. Secret redaction in task output
+
+Always on, owner-controlled — not a per-task option. `BRIDGE_ROOT` is a shared,
+bind-mounted directory, so before any task output is written there the daemon
+scrubs it. All three sinks are covered: the result file, the live progress log,
+and the status line `call_remote_streaming` polls.
+
+| Tier | What | Certainty |
+|---|---|---|
+| Known literal | The daemon's own `BRIDGE_TOKEN` | Exact |
+| Shape-matched | `sk-ant-…`, `sk-…`, `ghp_…`, `github_pat_…`, `xox*-…`, `AKIA…`/`ASIA…`, `AIza…`, `Authorization: Bearer …`, inline URL passwords, `-----BEGIN … PRIVATE KEY-----` blocks, long values assigned to key-ish names (`API_KEY=…`, `token: …`) | Heuristic |
+
+Redacted spans read as `[redacted:<kind>]` — a stable ASCII marker, so results
+stay diffable across runs and `json.dumps` doesn't escape it.
+
+**As a caller:** a `[redacted:…]` where you expected a value is the daemon
+protecting the shared directory, not a failing script. Bare long strings without
+a key-ish name (git SHAs, build hashes, paths) are deliberately *not* redacted —
+that would make ordinary build output unreadable.
+
+**Best-effort, not a guarantee.** An unrecognised credential format, or a secret
+split across two output lines, still gets through. Don't design a task around
+printing secrets. The machine owner can set `BRIDGE_REDACT=0` to disable
+redaction while debugging their own scripts.
+
+---
+
 ## 7. Async vs blocking
 
 | | Blocking (`call_remote`) | Async (`queue_task` → `poll_task_result`) |

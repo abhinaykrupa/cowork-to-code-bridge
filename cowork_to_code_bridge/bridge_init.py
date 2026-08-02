@@ -805,6 +805,21 @@ Example — a costly refactor, capped and sandboxed:
                permission_scope="edit",
                idempotency_key="refactor-auth-2026-06-18")
 
+### Secret redaction (always on, owner-controlled)
+Not a per-task option — the daemon scrubs secrets out of task output before
+writing it anywhere under BRIDGE_ROOT (result file, live progress log, status
+line). Its own BRIDGE_TOKEN is redacted exactly; vendor key shapes (sk-ant-,
+ghp_, github_pat_, xox*-, AKIA…, AIza…), Authorization headers, inline URL
+passwords, private-key blocks, and long values assigned to key-ish names
+(API_KEY=…) are matched by shape. Redacted spans read as [redacted:<kind>].
+
+What this means for you as a caller: if a result contains [redacted:…] where you
+expected a value, that is the daemon protecting the shared directory, not a bug
+in the script. The owner can set BRIDGE_REDACT=0 to turn it off when debugging.
+
+It is best-effort: an unrecognised secret format, or one split across two output
+lines, still gets through. Don't design a task around printing secrets.
+
 ## Async vs blocking
 - **Blocking (call_remote):** simplest; one call, one result. Risk: if the work
   outlives your sandbox timeout, the call dies even though the task may finish on
