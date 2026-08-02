@@ -112,6 +112,129 @@ CANCEL_GRACE_SEC = float(os.environ.get("BRIDGE_CANCEL_GRACE_SEC", "5.0"))
 SAFE_NAME = re.compile(r"scripts/[A-Za-z0-9_/.-]+\.(sh|py)")
 
 
+# ─── Secret redaction (#76) ───────────────────────────────────────────────────
+# BRIDGE_ROOT is the trust boundary: a shared/bind-mounted directory. Bounded
+# output caps the *size* of what a task writes there, not its *sensitivity*. A
+# task that echoes a token — `env`, a verbose CI script, a curl that prints its
+# Authorization header — otherwise lands that secret in the result file and the
+# live progress log verbatim, where it persists on disk in the shared directory.
+#
+# So the daemon scrubs on the write path (write_result + the progress tee), not
+# at any one call site: there are a dozen write_result callers and a new one
+# must not be able to forget.
+#
+# Two tiers, and the difference matters:
+#   1. Literals the daemon KNOWS are secret — its own BRIDGE_TOKEN. Registered
+#      at startup via register_secret(). Exact, not heuristic.
+#   2. Shape-matched patterns — vendor key prefixes, bearer headers, assignments
+#      to key-ish names. Best-effort by construction: an unrecognised secret
+#      shape passes through. Documented as defence-in-depth, never a guarantee.
+#
+# Redaction is on by default; BRIDGE_REDACT=0 disables it for people debugging
+# their own scripts, where seeing the raw output is the point.
+REDACT_ENABLED = os.environ.get("BRIDGE_REDACT", "1") != "0"
+# Stable marker so output stays diffable across runs. ASCII on purpose: results
+# are json.dumps'd, which escapes non-ASCII (a «» marker lands on disk as
+# «…»), making the file harder to read and to grep for a leak.
+REDACTED = "[redacted:{}]"
+
+# Literal secrets the daemon knows verbatim (its own token). Populated by
+# register_secret(); a module global because write_result has no session object
+# to thread it through, and the set is tiny and process-wide by nature.
+_SECRET_LITERALS: set[str] = set()
+
+# Shape-matched patterns. Each is (name, compiled regex); the substring that
+# should be replaced is group "secret" when present, else the whole match — so
+# a pattern can keep its context ("Authorization: Bearer") and scrub only the
+# credential, which makes the redacted output far easier to read.
+_REDACT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    # Vendor-prefixed keys. Prefixes are distinctive enough to match on their
+    # own — no key-ish context needed — so these fire even in bare output.
+    ("anthropic-key", re.compile(r"sk-ant-[A-Za-z0-9_\-]{16,}")),
+    ("openai-key", re.compile(r"\bsk-(?!ant-)[A-Za-z0-9_\-]{16,}")),
+    ("github-pat", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}")),
+    ("github-token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{16,}")),
+    ("slack-token", re.compile(r"\bxox[abposr]-[A-Za-z0-9\-]{10,}")),
+    ("aws-access-key-id", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
+    ("google-api-key", re.compile(r"\bAIza[A-Za-z0-9_\-]{35}\b")),
+    ("private-key-block", re.compile(
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
+        re.DOTALL)),
+    # Bearer / auth headers: keep the header name, scrub the credential.
+    ("bearer", re.compile(
+        r"(?i)\bAuthorization\s*:\s*(?:Bearer|Basic|token)\s+(?P<secret>\S+)")),
+    ("bearer", re.compile(r"\bBearer\s+(?P<secret>[A-Za-z0-9_\-.=]{16,})")),
+    # A URL with inline credentials: https://user:pa55w0rd@host → scrub the
+    # password only, so the host stays readable for debugging.
+    ("url-password", re.compile(r"(?<=://)[^\s/:@]+:(?P<secret>[^\s/@]+)(?=@)")),
+    # Generic high-entropy value assigned to a key-ish name. The name gate is
+    # what keeps this from eating every long identifier, hash, and base64 blob
+    # in ordinary build output: a bare 32-char string is NOT redacted, only one
+    # sitting to the right of token/secret/password/api_key/etc.
+    ("assigned-secret", re.compile(
+        r"(?i)\b[A-Za-z0-9_\-]*"
+        r"(?:token|secret|password|passwd|api[_\-]?key|access[_\-]?key|"
+        r"auth|credential)[A-Za-z0-9_\-]*"
+        r"\s*[:=]\s*"
+        r"[\"']?(?P<secret>[A-Za-z0-9_\-+/.=]{12,})[\"']?")),
+]
+
+
+def register_secret(value: str | None) -> None:
+    """Register a literal the daemon knows is secret (e.g. its own token).
+
+    Short values are ignored: a 4-character 'token' would match constantly in
+    ordinary output and redacting it would mangle far more than it protects.
+    """
+    if value and len(value) >= 8:
+        _SECRET_LITERALS.add(value)
+
+
+def redact_text(text: str) -> str:
+    """Scrub known secret literals and secret-shaped substrings from `text`.
+
+    Best-effort by design — see the section comment. Literals (tier 1) are
+    exact; patterns (tier 2) are heuristic and will miss unrecognised shapes.
+    """
+    if not REDACT_ENABLED or not isinstance(text, str) or not text:
+        return text
+    # Literals first: an exact known secret should be marked as such even if it
+    # would also match a pattern, and matching it first means the pattern pass
+    # can't split it into a partially-redacted mess.
+    for literal in _SECRET_LITERALS:
+        if literal in text:
+            text = text.replace(literal, REDACTED.format("token"))
+    for name, pat in _REDACT_PATTERNS:
+        def _sub(m: re.Match[str], _name: str = name) -> str:
+            marker = REDACTED.format(_name)
+            if "secret" in m.groupdict() and m.group("secret") is not None:
+                # Keep the surrounding context, replace only the credential.
+                start, end = m.span("secret")
+                return m.group(0)[: start - m.start()] + marker + m.group(0)[end - m.start():]
+            return marker
+        text = pat.sub(_sub, text)
+    return text
+
+
+def redact_payload(value: Any) -> Any:
+    """Recursively redact every string in a result payload.
+
+    Applied to the whole payload rather than just stdout/stderr: an error
+    message, a script arg echoed back, or any field a future code path adds can
+    carry a secret just as easily as stdout can.
+    """
+    if not REDACT_ENABLED:
+        return value
+    if isinstance(value, str):
+        return redact_text(value)
+    if isinstance(value, dict):
+        return {k: redact_payload(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [redact_payload(v) for v in value]
+    return value
+
+
+
 def load_env() -> dict[str, str]:
     """Merge process env with .env in BRIDGE_ROOT (process env wins)."""
     env = dict(os.environ)
@@ -131,9 +254,18 @@ def log(msg: str) -> None:
 
 
 def write_result(cmd_id: str, payload: dict) -> None:
-    """Atomic-write a result file."""
+    """Atomic-write a result file, redacting secrets on the way out (#76).
+
+    Redaction happens here — the single choke point every result passes
+    through — rather than at the dozen-plus call sites, so a new caller cannot
+    forget it and both the streaming and non-streaming paths are covered.
+    """
     payload.setdefault("id", cmd_id)
     payload.setdefault("ts_completed", time.time())
+    # id/ts are set before redaction so they are covered too; neither can match
+    # a pattern, but the ordering means "everything written is scrubbed" holds
+    # without exception carve-outs.
+    payload = redact_payload(payload)
     out = RESULTS / f"{cmd_id}.json"
     tmp = out.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(payload))
@@ -436,6 +568,13 @@ def _run_streaming(argv: list[str], cwd: str, env: dict[str, str],
         # MAX_PROGRESS_BYTES, so a runaway child can exhaust neither RAM nor disk.
         try:
             for line in iter(stream.readline, ""):
+                # Redact per line, before the line reaches ANY sink: the
+                # bounded tail (→ result file) and the progress log both live
+                # under BRIDGE_ROOT, so scrubbing only the result file would
+                # leave the same secret in the shared directory via the live
+                # view. Per line, not once at the end, so nothing unredacted is
+                # ever held or written.
+                line = redact_text(line)
                 buf.append(line)
                 if progress_bytes[0] >= MAX_PROGRESS_BYTES:
                     if not progress_capped[0]:
@@ -712,6 +851,15 @@ def main() -> int:
         log("!! BRIDGE_TOKEN not set, BRIDGE_ALLOW_UNAUTH=1 — accepting unauthenticated commands.")
     else:
         log(f"   bridge token loaded (len={len(token)}, prefix={token[:6]}…)")
+        # The one secret the daemon can redact with certainty rather than by
+        # shape (#76) — register it before any task can echo it back.
+        register_secret(token)
+
+    if REDACT_ENABLED:
+        log("   output redaction ON (best-effort; BRIDGE_REDACT=0 disables)")
+    else:
+        log("!! BRIDGE_REDACT=0 — task output written to results/ and progress/ "
+            "UNREDACTED, including any secrets it prints.")
 
     log(f"   BRIDGE_ROOT  = {BRIDGE_ROOT}")
     log(f"   SCRIPTS_DIR  = {SCRIPTS_DIR}")
