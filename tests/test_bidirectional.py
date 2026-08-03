@@ -279,3 +279,141 @@ def test_run_claude_passes_model_and_effort_flags():
     # The flag arrays must actually reach the exec line, not just be built.
     assert '"${MODEL_FLAGS[@]}"' in script
     assert '"${EFFORT_FLAGS[@]}"' in script
+
+
+# ---------------------------------------------------------------------------
+# post_message_to_cowork / detect_messages_from_claude_code
+#
+# These two are advertised in CLAUDE.md and docs/BRIDGE_INIT.md, and
+# bridge_init.py hands users a literal
+#   `from cowork_to_code_bridge.client import post_message_to_cowork`
+# snippet. They existed only in the two single-file copies, so that documented
+# import raised ImportError. Presence is asserted in test_single_file_client.py;
+# what follows checks the behaviour actually round-trips.
+# ---------------------------------------------------------------------------
+
+def test_post_message_round_trips(bridge_root):
+    """A posted message is readable back, with its fields intact."""
+    from cowork_to_code_bridge.client import (
+        detect_messages_from_claude_code,
+        post_message_to_cowork,
+    )
+
+    msg_id = post_message_to_cowork(
+        "progress", "Build 40% complete", parent_task_id="cmd_a",
+        bridge_root=bridge_root,
+    )
+
+    msgs = detect_messages_from_claude_code(bridge_root=bridge_root)
+    assert [m["id"] for m in msgs] == [msg_id]
+    assert msgs[0]["type"] == "progress"
+    assert msgs[0]["content"] == "Build 40% complete"
+    assert msgs[0]["parent"] == "cmd_a"
+    assert msgs[0]["from"] == "claude-code"
+
+
+def test_detect_filters_by_parent(bridge_root):
+    """parent_task_id filters — and the negative control: the other task's
+    message must NOT come back. A filter that ignores its argument would pass
+    a check that only asserts "mine is present"."""
+    from cowork_to_code_bridge.client import (
+        detect_messages_from_claude_code,
+        post_message_to_cowork,
+    )
+
+    mine = post_message_to_cowork("info", "for A", parent_task_id="cmd_a",
+                                  bridge_root=bridge_root)
+    theirs = post_message_to_cowork("info", "for B", parent_task_id="cmd_b",
+                                    bridge_root=bridge_root)
+
+    got = [m["id"] for m in
+           detect_messages_from_claude_code("cmd_a", bridge_root=bridge_root)]
+    assert mine in got
+    assert theirs not in got, "parent filter leaked another task's message"
+
+    # Unfiltered still sees both — proves the filter narrowed, not that the
+    # second write silently failed.
+    both = [m["id"] for m in
+            detect_messages_from_claude_code(bridge_root=bridge_root)]
+    assert {mine, theirs} <= set(both)
+
+
+def test_detect_is_idempotent(bridge_root):
+    """Reading does not consume: a poll loop can call it every iteration."""
+    from cowork_to_code_bridge.client import (
+        detect_messages_from_claude_code,
+        post_message_to_cowork,
+    )
+
+    post_message_to_cowork("info", "hello", bridge_root=bridge_root)
+    first = detect_messages_from_claude_code(bridge_root=bridge_root)
+    second = detect_messages_from_claude_code(bridge_root=bridge_root)
+    assert first == second
+    assert len(first) == 1
+
+
+def test_detect_missing_dir_is_empty_not_error(tmp_path):
+    """A bridge root with no to_cowork/ means 'nothing yet', not a crash."""
+    from cowork_to_code_bridge.client import detect_messages_from_claude_code
+
+    empty = tmp_path / "bare"
+    empty.mkdir()
+    assert detect_messages_from_claude_code(bridge_root=empty) == []
+
+
+def test_detect_skips_unparseable_without_dropping_good_ones(bridge_root):
+    """One corrupt file must not sink the whole read."""
+    from cowork_to_code_bridge.client import (
+        detect_messages_from_claude_code,
+        post_message_to_cowork,
+    )
+
+    good = post_message_to_cowork("info", "readable", bridge_root=bridge_root)
+    (bridge_root / "to_cowork" / "msg_broken.json").write_text("{not json")
+
+    got = [m["id"] for m in detect_messages_from_claude_code(bridge_root=bridge_root)]
+    assert got == [good]
+
+
+def test_post_message_omits_parent_when_not_given(bridge_root):
+    """No parent_task_id → no 'parent' key, so a parent-filtered read skips it."""
+    from cowork_to_code_bridge.client import (
+        detect_messages_from_claude_code,
+        post_message_to_cowork,
+    )
+
+    post_message_to_cowork("info", "unparented", bridge_root=bridge_root)
+    msgs = detect_messages_from_claude_code(bridge_root=bridge_root)
+    assert "parent" not in msgs[0]
+    assert detect_messages_from_claude_code("cmd_a", bridge_root=bridge_root) == []
+
+
+def test_post_message_write_is_atomic(bridge_root):
+    """tmp+rename: no .tmp residue, and no half-written file is left behind."""
+    from cowork_to_code_bridge.client import post_message_to_cowork
+
+    post_message_to_cowork("info", "atomic", bridge_root=bridge_root)
+    leftovers = list((bridge_root / "to_cowork").glob("*.tmp"))
+    assert not leftovers, f"temp files left behind: {leftovers}"
+
+
+def test_documented_import_path_works():
+    """bridge_init.py hands users this exact import — it must not raise.
+
+    Checked via importlib rather than a bare `from ... import ...` so the
+    assertion survives an import-sorter: ruff deduplicated the top-level and
+    submodule imports of the same name and quietly dropped half the check.
+    """
+    import importlib
+
+    client_mod = importlib.import_module("cowork_to_code_bridge.client")
+    top_mod = importlib.import_module("cowork_to_code_bridge")
+
+    for name in ("post_message_to_cowork", "detect_messages_from_claude_code"):
+        assert hasattr(client_mod, name), (
+            f"documented import `from cowork_to_code_bridge.client import {name}` "
+            f"would raise ImportError"
+        )
+        assert hasattr(top_mod, name), (
+            f"`from cowork_to_code_bridge import {name}` would raise ImportError"
+        )

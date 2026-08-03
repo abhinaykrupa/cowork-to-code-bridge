@@ -116,14 +116,50 @@ def test_single_file_has_full_public_api():
     assert not missing, f"bridge_client.py is missing public functions: {missing}"
 
 
+def test_package_has_full_public_api():
+    """Every advertised public function must exist in the PACKAGE client too.
+
+    Regression guard (the mirror of test_single_file_has_full_public_api):
+    post_message_to_cowork and detect_messages_from_claude_code lived only in
+    the two single-file copies while bridge_init.py told users to run
+    `from cowork_to_code_bridge.client import post_message_to_cowork` — which
+    raised ImportError. The old signature test skipped any name missing on
+    either side, so a package-side gap passed silently; this asserts it.
+    """
+    from cowork_to_code_bridge import client as pkg
+
+    missing = [name for name in _PUBLIC_API if not hasattr(pkg, name)]
+    assert not missing, f"cowork_to_code_bridge/client.py is missing: {missing}"
+
+
+def test_package_reexports_full_public_api():
+    """`from cowork_to_code_bridge import X` must work for every public name."""
+    import cowork_to_code_bridge as top
+
+    missing = [name for name in _PUBLIC_API if not hasattr(top, name)]
+    assert not missing, f"cowork_to_code_bridge/__init__.py does not re-export: {missing}"
+
+    not_in_all = [name for name in _PUBLIC_API if name not in top.__all__]
+    assert not not_in_all, f"names missing from __all__: {not_in_all}"
+
+
 def test_single_file_signatures_match_package_for_all_public_api():
-    """Each shared public function must have identical params in both copies."""
+    """Each public function must have identical params in ALL copies.
+
+    A name absent from either side is drift, not a reason to skip — the two
+    `has_full_public_api` tests above assert presence, so by the time this runs
+    every name must be on both sides.
+    """
     single = _load_single()
     from cowork_to_code_bridge import client as pkg
 
     drifted = {}
     for name in _PUBLIC_API:
         if not (hasattr(single, name) and hasattr(pkg, name)):
+            drifted[name] = {
+                "single": "MISSING" if not hasattr(single, name) else "present",
+                "package": "MISSING" if not hasattr(pkg, name) else "present",
+            }
             continue
         s = set(inspect.signature(getattr(single, name)).parameters)
         p = set(inspect.signature(getattr(pkg, name)).parameters)

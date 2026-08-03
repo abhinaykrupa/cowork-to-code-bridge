@@ -10,9 +10,13 @@ from .client import (
     call_remote_streaming,
     cancel_task,
     daemon_alive,
+    detect_messages_from_claude_code,
     format_status_line,
     poll_task_result,
+    post_message_to_cowork,
     queue_task,
+    reply_to_machine,
+    resume_remote,
 )
 
 __version__ = "0.5.1"
@@ -21,8 +25,12 @@ __all__ = [
     "call_remote_streaming",
     "cancel_task",
     "daemon_alive",
+    "detect_messages_from_claude_code",
     "format_status_line",
     "poll_task_result",
+    "post_message_to_cowork",
     "queue_task",
+    "reply_to_machine",
+    "resume_remote",
     "__version__",
 ]
