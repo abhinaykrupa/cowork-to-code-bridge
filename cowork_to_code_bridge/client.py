@@ -755,3 +755,90 @@ def daemon_alive(
         return r.get("exit_code") == 0
     except TimeoutError:
         return False
+
+
+def post_message_to_cowork(
+    message_type: str,
+    content: str,
+    parent_task_id: str | None = None,
+    bridge_root: Path | str | None = None,
+) -> str:
+    """Post a message from Claude Code back to Cowork (machine → Cowork).
+
+    Args:
+        message_type: Type of message ("progress", "completed", "error", "info")
+        content: Message content (plain text or JSON string)
+        parent_task_id: Optional. The task_id this message belongs to. Sets the
+            ``parent`` field so a Cowork-side reader can correlate it with the
+            task it came from, rather than seeing an undifferentiated stream.
+        bridge_root: Override the auto-detected bridge directory
+
+    Returns:
+        request_id: The ID of the posted message (can be replied to)
+
+    Messages are written to ``to_cowork/`` for the Cowork side to pick up with
+    detect_messages_from_claude_code. The write is atomic (tmp + rename) so a
+    reader never observes a half-written message.
+    """
+    root = Path(bridge_root) if bridge_root else _resolve_bridge_root()
+    to_cowork = root / "to_cowork"
+    to_cowork.mkdir(parents=True, exist_ok=True)
+
+    request_id = f"msg_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+    message: dict[str, Any] = {
+        "id": request_id,
+        "type": message_type,
+        "content": content,
+        "ts": time.time(),
+        "from": "claude-code",
+    }
+    if parent_task_id:
+        message["parent"] = parent_task_id
+
+    msg_file = to_cowork / f"{request_id}.json"
+    tmp = msg_file.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(message))
+    tmp.rename(msg_file)
+
+    return request_id
+
+
+def detect_messages_from_claude_code(
+    parent_task_id: str | None = None,
+    bridge_root: Path | str | None = None,
+) -> list[dict[str, Any]]:
+    """Read messages posted by Claude Code (machine → Cowork). Idempotent.
+
+    Args:
+        parent_task_id: Optional. Only return messages whose ``parent`` matches
+        bridge_root: Override the auto-detected bridge directory
+
+    Returns:
+        List of message dicts {id, type, content, ts, from, parent (if set)},
+        oldest first. Empty list when there is nothing to read — a missing
+        ``to_cowork/`` directory is "no messages yet", not an error.
+
+    Reading does not consume: calling this twice returns the same messages, so
+    a poll loop can call it on every iteration without tracking state.
+    """
+    root = Path(bridge_root) if bridge_root else _resolve_bridge_root()
+    to_cowork = root / "to_cowork"
+
+    if not to_cowork.exists():
+        return []
+
+    messages: list[dict[str, Any]] = []
+    for msg_file in sorted(to_cowork.glob("*.json")):
+        if msg_file.suffix == ".answered":
+            continue  # already handled by a prior reply
+        try:
+            msg = json.loads(msg_file.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue  # partial write or unreadable — skip, don't crash the loop
+
+        if parent_task_id and msg.get("parent") != parent_task_id:
+            continue
+
+        messages.append(msg)
+
+    return messages
