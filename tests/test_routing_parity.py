@@ -6,8 +6,10 @@ The routing knowledge is duplicated across four surfaces, by necessity:
     every comment in the shell copies calls "the canonical source".
   * ``install.sh`` — the ``run_claude.sh`` heredoc, which is what a fresh
     ``curl | bash`` install actually writes to disk.
-  * ``bridge/scripts/run_claude.sh`` — the working copy on this machine.
   * ``examples/allowed_scripts/run_claude.sh`` — the copy contributors read.
+  * ``bridge/scripts/run_claude.sh`` — the copy the daemon actually executes.
+    This one is gitignored (``bridge/`` is the local runtime directory), so it
+    is checked when present and skipped in CI, where it cannot exist.
 
 Nothing enforced that they agree. That is the same drift class that has bitten
 this repo twice before: ``--json`` silently dropped out of the ``install.sh``
@@ -43,11 +45,18 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SH = REPO_ROOT / "install.sh"
 DAEMON_PY = REPO_ROOT / "cowork_to_code_bridge" / "daemon.py"
 
-# The two checked-in copies of run_claude.sh. The third copy lives inside the
+# The checked-in copy of run_claude.sh. A second copy lives inside the
 # install.sh heredoc and is extracted below rather than read from disk.
-STANDALONE_COPIES = [
-    REPO_ROOT / "bridge" / "scripts" / "run_claude.sh",
+TRACKED_COPIES = [
     REPO_ROOT / "examples" / "allowed_scripts" / "run_claude.sh",
+]
+
+# bridge/ is the local runtime directory and is gitignored, so this copy exists
+# on a developer's machine but never in CI. Check it when it is there — it is
+# the copy the daemon actually executes, so local drift matters — and skip it
+# silently when it is not, rather than failing a checkout that cannot have it.
+UNTRACKED_COPIES = [
+    REPO_ROOT / "bridge" / "scripts" / "run_claude.sh",
 ]
 
 # `haiku)  echo "claude-haiku-4-5-20251001" ;;`
@@ -102,9 +111,12 @@ def _tier_map_from_shell(source: str) -> dict[str, str]:
 
 def _shell_sources() -> list[tuple[str, str]]:
     sources = [("install.sh (heredoc)", _extract_run_claude_from_install_sh())]
-    for path in STANDALONE_COPIES:
+    for path in TRACKED_COPIES:
         assert path.exists(), f"missing run_claude.sh copy: {path}"
         sources.append((str(path.relative_to(REPO_ROOT)), path.read_text()))
+    for path in UNTRACKED_COPIES:
+        if path.exists():
+            sources.append((str(path.relative_to(REPO_ROOT)), path.read_text()))
     return sources
 
 
