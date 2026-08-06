@@ -395,8 +395,12 @@ chmod +x "$BRIDGE_ROOT/scripts/ping.sh"
 
 cat > "$BRIDGE_ROOT/scripts/hello.sh" <<'HELLO'
 #!/usr/bin/env bash
-# hello.sh — sample script you can call via the bridge.
+# Example whitelisted script. Save as ~/.cowork-to-code-bridge/scripts/hello.sh
+# and chmod +x. Then call from Cowork:
+#   call_remote("scripts/hello.sh", args=["world"])
 echo "hello from $(hostname) — args: $*"
+echo "pwd: $(pwd)"
+echo "ts:  $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 HELLO
 chmod +x "$BRIDGE_ROOT/scripts/hello.sh"
 
@@ -1074,7 +1078,7 @@ exit 0
 DLG
 cat > "$BRIDGE_ROOT/scripts/git_status.sh" <<'GS'
 #!/usr/bin/env bash
-# git_status.sh — git status in any repo directory.
+# Example: git status in any repo directory.
 #
 # Text (default): the familiar `git status --short --branch` output.
 # JSON (--json):   a parseable object Cowork can consume without scraping text —
@@ -1109,18 +1113,26 @@ upstream=""
 ahead=0
 behind=0
 
+# Branch headers look like:  "# branch.head main", "# branch.upstream origin/main",
+# "# branch.ab +2 -1". A detached HEAD reports "(detached)".
 while IFS= read -r line; do
   case "$line" in
     "# branch.head "*)     branch="${line#\# branch.head }" ;;
     "# branch.upstream "*) upstream="${line#\# branch.upstream }" ;;
     "# branch.ab "*)
-      ab="${line#\# branch.ab }"
-      a="${ab%% *}"; b="${ab##* }"
+      ab="${line#\# branch.ab }"           # e.g. "+2 -1"
+      a="${ab%% *}"; b="${ab##* }"          # "+2"  "-1"
       ahead="${a#+}"; behind="${b#-}"
       ;;
   esac
 done <<< "$status"
 
+# Changed/untracked entries: build a JSON array of {x, y, path}.
+# Porcelain v2 entry forms we care about:
+#   "1 <XY> ... <path>"          ordinary changed entry
+#   "2 <XY> ... <path>\t<orig>"  rename/copy (path is the new name, tab-separated)
+#   "u <XY> ... <path>"          unmerged
+#   "? <path>"                   untracked
 json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
 files_json=""
@@ -1131,11 +1143,14 @@ append_file() {
   if [ -z "$files_json" ]; then files_json="$entry"; else files_json="$files_json,$entry"; fi
 }
 
+# Untracked/ignored paths are C-quoted by git when they contain special chars
+# (wrapped in "..." with \-escapes). Unwrap to the literal filename.
 unquote_path() {
   local p="$1"
   case "$p" in
     \"*\")
       p="${p#\"}"; p="${p%\"}"
+      # Undo the common C-style escapes git emits.
       p="${p//\\\"/\"}"; p="${p//\\\\/\\}"
       ;;
   esac
@@ -1144,22 +1159,27 @@ unquote_path() {
 
 while IFS= read -r line; do
   case "$line" in
+    # Ordinary changed entry: 8 leading fields, then <path>.
     "1 "*)
       xy="$(printf '%s' "$line" | cut -d' ' -f2)"
       path="$(printf '%s' "$line" | cut -d' ' -f9-)"
       append_file "${xy:0:1}" "${xy:1:1}" "$path"
       ;;
+    # Rename/copy entry: 9 leading fields (extra <Xscore>), then
+    # <new-path>\t<orig-path>. We report the new path.
     "2 "*)
       xy="$(printf '%s' "$line" | cut -d' ' -f2)"
       rest="$(printf '%s' "$line" | cut -d' ' -f10-)"
       path="${rest%%$'\t'*}"
       append_file "${xy:0:1}" "${xy:1:1}" "$path"
       ;;
+    # Unmerged entry: 10 leading fields, then <path>.
     "u "*)
       xy="$(printf '%s' "$line" | cut -d' ' -f2)"
       path="$(printf '%s' "$line" | cut -d' ' -f11-)"
       append_file "${xy:0:1}" "${xy:1:1}" "$path"
       ;;
+    # Untracked entry: "? <path>" (path may be C-quoted).
     "? "*)
       append_file "?" "?" "$(unquote_path "${line#\? }")"
       ;;
@@ -1485,39 +1505,95 @@ POD
 # Cowork session (async inbox; Cowork picks it up next time one is open).
 cat > "$BRIDGE_ROOT/scripts/request_cowork.sh" <<'REQCW'
 #!/usr/bin/env bash
-# request_cowork.sh — drop a request for a Claude Cowork session (async inbox).
-# Cowork has no inbound address, so this queues to BRIDGE_ROOT/to_cowork/ and a
-# Cowork session picks it up next time one is open and checks its inbox.
-# Usage: request_cowork.sh "<request text>" [--wait SECONDS]
+# request_cowork.sh — REVERSE direction: hand a request from this machine
+# (Claude Code) to a Claude Cowork session.
+#
+# Why this is an async INBOX, not a live call:
+#   The Cowork sandbox has no inbound address — nothing on the Mac can "call"
+#   it. So this drops a request into BRIDGE_ROOT/to_cowork/, and a Cowork
+#   session picks it up the next time one is open and checks its inbox. There
+#   is no always-on agent on the Cowork side, so delivery is best-effort /
+#   whenever-Cowork-is-next-open. If you need a guaranteed live exchange, just
+#   open Cowork and ask directly.
+#
+# Usage (from Claude Code on the Mac, or any shell):
+#   request_cowork.sh "Summarize the latest PRs and draft release notes"
+#   request_cowork.sh "Research X and write a doc" --wait 300   # poll for a reply
+#
+# Args:
+#   $1            the request text for Cowork (required)
+#   --wait SECS   optional: poll cowork_results/ for a reply for up to SECS
 set -euo pipefail
+
 BRIDGE_ROOT="${BRIDGE_ROOT:-$HOME/.cowork-to-code-bridge}"
-INBOX="$BRIDGE_ROOT/to_cowork"; REPLIES="$BRIDGE_ROOT/cowork_results"
-REQUEST="${1:?usage: request_cowork.sh \"<request>\" [--wait SECONDS]}"; shift || true
+INBOX="$BRIDGE_ROOT/to_cowork"
+REPLIES="$BRIDGE_ROOT/cowork_results"
+
+REQUEST="${1:-}"
+if [[ -z "$REQUEST" ]]; then
+  echo "usage: request_cowork.sh \"<request text>\" [--wait SECONDS]" >&2
+  exit 2
+fi
+shift || true
+
 WAIT=0
 if [[ "${1:-}" == "--wait" ]]; then
   WAIT="${2:-300}"
-  [[ "$WAIT" =~ ^[0-9]+$ ]] || { echo "--wait expects seconds, got: $WAIT" >&2; exit 2; }
+  if [[ ! "$WAIT" =~ ^[0-9]+$ ]]; then
+    echo "request_cowork.sh: --wait expects a number of seconds, got: ${WAIT}" >&2
+    exit 2
+  fi
   shift 2 || true
 fi
-mkdir -p "$INBOX" "$REPLIES"; chmod 700 "$INBOX" "$REPLIES" 2>/dev/null || true
+
+mkdir -p "$INBOX" "$REPLIES"
+chmod 700 "$INBOX" "$REPLIES" 2>/dev/null || true
+
+# Unique id. Avoid $RANDOM-only collisions; combine epoch + pid + a short rand.
 ID="$(date +%s)_$$_${RANDOM}"
 TOKEN=""
-[[ -f "$BRIDGE_ROOT/.env" ]] && TOKEN="$(grep '^BRIDGE_TOKEN=' "$BRIDGE_ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]')"
-TMP="$INBOX/.$ID.json.tmp"; OUT="$INBOX/$ID.json"
+if [[ -f "$BRIDGE_ROOT/.env" ]]; then
+  # Strip surrounding quotes then whitespace — same robust pipeline as install.sh.
+  TOKEN="$(grep '^BRIDGE_TOKEN=' "$BRIDGE_ROOT/.env" 2>/dev/null | head -1 \
+    | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]')"
+fi
+
+# Atomic write: .tmp then mv, so a polling Cowork session never reads a partial file.
+TMP="$INBOX/.$ID.json.tmp"
+OUT="$INBOX/$ID.json"
+# JSON-escape the request via python (stdlib) for safety with quotes/newlines.
+# BRIDGE_CMD_ID is injected by the daemon so mid-task requests can be correlated
+# back to the running task by the Cowork client's interactive poll loop.
 PARENT="${BRIDGE_CMD_ID:-}"
 python3 - "$ID" "$REQUEST" "$TOKEN" "$PARENT" >"$TMP" <<'PY'
-import json,sys,time
-_id,req,tok,parent=sys.argv[1],sys.argv[2],sys.argv[3],sys.argv[4]
-o={"id":_id,"request":req,"ts":time.time(),"from":"claude-code"}
-if tok:o["token"]=tok
-if parent:o["parent"]=parent
-print(json.dumps(o))
+import json, os, sys, time
+_id, req, tok, parent = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+obj = {"id": _id, "request": req, "ts": time.time(), "from": "claude-code"}
+if tok:
+    obj["token"] = tok
+if parent:
+    obj["parent"] = parent
+print(json.dumps(obj))
 PY
-mv "$TMP" "$OUT"; echo "queued request for Cowork: $OUT"
+mv "$TMP" "$OUT"
+echo "queued request for Cowork: $OUT"
+echo "  → a Cowork session will see it next time one is open and checks its inbox."
+
 if [[ "$WAIT" -gt 0 ]]; then
-  RF="$REPLIES/$ID.json"; dl=$(( $(date +%s)+WAIT ))
-  while [[ "$(date +%s)" -lt "$dl" ]]; do [[ -f "$RF" ]] && { echo "=== reply ==="; cat "$RF"; exit 0; }; sleep 2; done
-  echo "no reply within ${WAIT}s (Cowork may not be open); request stays queued." >&2
+  echo "  waiting up to ${WAIT}s for a reply in $REPLIES/$ID.json ..."
+  REPLY_FILE="$REPLIES/$ID.json"
+  deadline=$(( $(date +%s) + WAIT ))
+  while [[ "$(date +%s)" -lt "$deadline" ]]; do
+    if [[ -f "$REPLY_FILE" ]]; then
+      echo "=== reply from Cowork ==="
+      cat "$REPLY_FILE"
+      exit 0
+    fi
+    sleep 2
+  done
+  echo "  no reply within ${WAIT}s (Cowork may not be open right now)." >&2
+  echo "  the request stays queued at $OUT until a Cowork session picks it up." >&2
+  # exit 1 on timeout so callers can distinguish "timed out" from "got a reply" (exit 0).
   exit 1
 fi
 REQCW

@@ -1433,3 +1433,72 @@ def test_newly_installed_scripts_match_canonical_copy(
         f"{script_name} in install.sh has drifted from "
         f"examples/allowed_scripts/{script_name}"
     )
+
+
+# ── content parity for EVERY heredoc, not a hand-kept list ───────────────────
+#
+# The set-membership checks above prove install.sh creates the right script
+# NAMES. They say nothing about the BODIES. Content parity was asserted only for
+# whichever names someone had remembered to add to a parametrize list, so a
+# heredoc could drift from its canonical copy and the suite stayed green — which
+# is how docker_ps/pkg_outdated/port_check lost --json on installed machines, and
+# how request_cowork.sh came to exit 1 instead of 2 on a usage error.
+#
+# Discovering (name, marker) pairs from install.sh itself removes the list that
+# kept falling behind: add a heredoc and it is guarded from that moment on.
+
+_HEREDOC_RE = re.compile(
+    r'^cat > "\$BRIDGE_ROOT/scripts/([A-Za-z0-9_.-]+\.sh)" <<\'([A-Za-z0-9_]+)\'$',
+    re.MULTILINE,
+)
+
+
+def _installed_script_heredocs() -> list[tuple[str, str]]:
+    """Every (script_name, heredoc_marker) pair install.sh writes."""
+    return _HEREDOC_RE.findall(INSTALL_SH.read_text())
+
+
+def test_heredoc_discovery_finds_the_catalog() -> None:
+    """Guard the guard: a regex that matches nothing would vacuously pass.
+
+    If install.sh's heredoc syntax ever changes, this fails loudly instead of
+    silently reducing the parity check below to zero cases.
+    """
+    found = _installed_script_heredocs()
+    names = {name for name, _ in found}
+    assert len(found) >= 20, f"heredoc regex matched only {len(found)} scripts"
+    assert names == _installed_script_names(), (
+        "the (name, marker) scan disagrees with the name-only scan — one of the "
+        f"two regexes is stale: {names ^ _installed_script_names()}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("script_name", "marker"),
+    _installed_script_heredocs(),
+    ids=[name for name, _ in _installed_script_heredocs()],
+)
+def test_every_install_heredoc_matches_canonical_copy(
+    script_name: str, marker: str
+) -> None:
+    """Byte-identical: what a curl|bash user gets == examples/allowed_scripts/.
+
+    examples/ is canonical. When this fails, fix install.sh to match examples/,
+    not the other way round.
+    """
+    canonical_path = REPO_ROOT / "examples" / "allowed_scripts" / script_name
+    assert canonical_path.exists(), (
+        f"install.sh creates {script_name} but examples/allowed_scripts/ has no "
+        "canonical copy to diff it against"
+    )
+
+    canonical = canonical_path.read_text()
+    if not canonical.endswith("\n"):
+        canonical += "\n"
+
+    assert _extract_script(script_name, marker) == canonical, (
+        f"install.sh's {script_name} heredoc has drifted from "
+        f"examples/allowed_scripts/{script_name} — installed machines are "
+        "running different code than the catalog documents. examples/ is "
+        "canonical; update the install.sh heredoc to match it."
+    )
