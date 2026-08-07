@@ -820,6 +820,33 @@ in the script. The owner can set BRIDGE_REDACT=0 to turn it off when debugging.
 It is best-effort: an unrecognised secret format, or one split across two output
 lines, still gets through. Don't design a task around printing secrets.
 
+## Reading exit_code
+
+A real process exit is always >= 0, so any NEGATIVE exit_code is the daemon
+telling you something about the task rather than the task's own result. Branch on
+the number; the accompanying `error` string is prose for humans and is not a
+stable API.
+
+| Code | Meaning                            | Worth retrying?                  |
+|------|------------------------------------|----------------------------------|
+| `-1` | Rejected before it ever ran        | No — fix the request first       |
+| `-2` | Timed out while running            | Yes, with a longer `timeout`     |
+| `-3` | Failed to spawn                    | Yes — usually a missing binary   |
+| `-4` | Daemon crashed mid-execution       | No — never auto-retried          |
+| `-5` | Cancelled (`cancelled=True`)       | Only if you didn't mean to       |
+| `-6` | Expired in the queue (`expired`)   | Yes, if the work is still wanted |
+
+`-1` is the one to handle deliberately, because it is the daemon refusing the
+request, not the machine failing: a bad bridge token, a script that isn't on the
+allowlist or doesn't exist, malformed args, an oversized command file, or a plan
+your `approve_plan.sh` hook declined (`plan_rejected=True`). Retrying an
+unchanged `-1` request fails identically every time — read `error`, fix the
+request, then resubmit.
+
+`-4` is deliberately never retried: the daemon died with the task in flight, so
+it cannot know whether the work half-completed. Re-running a half-applied deploy
+is worse than reporting the failure.
+
 ## Async vs blocking
 - **Blocking (call_remote):** simplest; one call, one result. Risk: if the work
   outlives your sandbox timeout, the call dies even though the task may finish on
