@@ -20,15 +20,74 @@ from __future__ import annotations
 
 import os
 import platform
+import plistlib
+import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-BRIDGE_ROOT = Path(os.environ.get("BRIDGE_ROOT", Path.home() / ".cowork-to-code-bridge"))
 SKILL_DIR = Path.home() / ".claude" / "skills" / "cowork-to-code-bridge"
 PLIST_LABEL = "dev.cowork-to-code-bridge.daemon"
 SYSTEMD_UNIT = "cowork-to-code-bridge.service"
+PLIST_PATH = Path.home() / "Library" / "LaunchAgents" / f"{PLIST_LABEL}.plist"
+SYSTEMD_PATH = Path.home() / ".config" / "systemd" / "user" / SYSTEMD_UNIT
+DEFAULT_ROOT = Path.home() / ".cowork-to-code-bridge"
+
+
+def _service_bridge_root() -> Path | None:
+    """BRIDGE_ROOT the *installed daemon service* actually runs with.
+
+    The daemon takes its root from the launchd plist / systemd unit written by
+    the installer. A shell running selfcheck has no such environment, so the
+    two can silently disagree — selfcheck then pings a directory no daemon is
+    watching and reports a round-trip failure against a perfectly healthy
+    daemon. Read the service definition so we check the real root.
+
+    Returns None when no service file exists (not installed, or an unsupported
+    OS) — callers fall back to the env var / default.
+    """
+    try:
+        if platform.system() == "Darwin":
+            if not PLIST_PATH.is_file():
+                return None
+            with PLIST_PATH.open("rb") as fh:
+                env = plistlib.load(fh).get("EnvironmentVariables") or {}
+            root = env.get("BRIDGE_ROOT")
+            return Path(root) if root else None
+
+        if platform.system() == "Linux":
+            if not SYSTEMD_PATH.is_file():
+                return None
+            # Environment=BRIDGE_ROOT=/path  |  Environment="BRIDGE_ROOT=/path"
+            pat = re.compile(r'^\s*Environment=\s*"?BRIDGE_ROOT=([^"\n]+)"?\s*$')
+            for line in SYSTEMD_PATH.read_text().splitlines():
+                m = pat.match(line)
+                if m:
+                    return Path(m.group(1).strip())
+            return None
+    except Exception:  # noqa: BLE001 — a malformed service file must not crash selfcheck
+        return None
+    return None
+
+
+def _resolve_bridge_root() -> tuple[Path, str]:
+    """Pick the root to check, and say where it came from.
+
+    Precedence: explicit BRIDGE_ROOT env var > installed service definition >
+    default. An explicit env var always wins so a developer can point selfcheck
+    at a scratch root deliberately.
+    """
+    env_root = os.environ.get("BRIDGE_ROOT", "").strip()
+    if env_root:
+        return Path(env_root), "BRIDGE_ROOT env var"
+    svc = _service_bridge_root()
+    if svc is not None:
+        return svc, "installed daemon service"
+    return DEFAULT_ROOT, "default"
+
+
+BRIDGE_ROOT, BRIDGE_ROOT_SOURCE = _resolve_bridge_root()
 
 # ANSI colours (suppressed when not a TTY)
 _TTY = sys.stdout.isatty()
@@ -53,10 +112,23 @@ def _bold(s: str) -> str:
 # ── individual checks ────────────────────────────────────────────────────────
 
 def check_bridge_root() -> tuple[bool, str]:
-    """1. BRIDGE_ROOT directory exists."""
-    if BRIDGE_ROOT.is_dir():
-        return True, str(BRIDGE_ROOT)
-    return False, f"{BRIDGE_ROOT} not found — run the installer first"
+    """1. BRIDGE_ROOT directory exists, and matches the root the daemon serves.
+
+    A mismatch is reported here rather than left to surface as a mystery
+    round-trip timeout in check 5: the daemon is fine, it is simply watching a
+    different directory than the one we are about to write a ping into.
+    """
+    if not BRIDGE_ROOT.is_dir():
+        return False, f"{BRIDGE_ROOT} not found — run the installer first"
+
+    svc = _service_bridge_root()
+    if svc is not None and svc.expanduser() != BRIDGE_ROOT.expanduser():
+        return False, (
+            f"{BRIDGE_ROOT} (from {BRIDGE_ROOT_SOURCE}) but the installed daemon "
+            f"serves {svc} — unset BRIDGE_ROOT, or re-run the installer to move "
+            f"the daemon"
+        )
+    return True, f"{BRIDGE_ROOT} (from {BRIDGE_ROOT_SOURCE})"
 
 
 def check_token() -> tuple[bool, str]:
@@ -98,8 +170,20 @@ def check_daemon_registered() -> tuple[bool, str]:
                 if PLIST_LABEL in line:
                     cols = line.split()
                     pid = cols[0] if cols else "-"
+                    status = cols[1] if len(cols) > 1 else "0"
                     if pid != "-":
                         return True, f"launchd: running (pid {pid})"
+                    # Registered but dead. Exit 78 (EX_CONFIG) means launchd could
+                    # not even spawn it — nearly always a TCC-protected
+                    # WorkingDirectory, which produces no log output at all.
+                    if status == "78":
+                        return False, (
+                            f"launchd: cannot start (EX_CONFIG). BRIDGE_ROOT "
+                            f"{BRIDGE_ROOT} is likely inside a TCC-protected folder "
+                            f"(Documents/Desktop/Downloads) — launchd cannot chdir "
+                            f"there. Reinstall with BRIDGE_ROOT=$HOME/"
+                            f".cowork-to-code-bridge"
+                        )
                     return False, (
                         f"launchd: registered but not running — "
                         f"try: launchctl start {PLIST_LABEL}"
