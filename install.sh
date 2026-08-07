@@ -346,6 +346,30 @@ fi
 c_green "  ✓ user scripts dir: $USER_SCRIPTS_DIR"
 
 # ─── 3. Bridge directory layout ──────────────────────────────────────────────
+# Refuse a TCC-protected BRIDGE_ROOT before anything is written.
+#
+# On macOS 13+, ~/Documents, ~/Desktop and ~/Downloads are protected by TCC.
+# A shell you type into inherits your terminal's consent, so the daemon runs
+# fine by hand — but launchd has no such consent and cannot chdir into the
+# plist's WorkingDirectory. It kills the job with EX_CONFIG (78) *before*
+# Python starts, so nothing is ever written to daemon.log or daemon.err.
+# KeepAlive then respawns it forever, silently. The symptom is a daemon that
+# `launchctl list` shows as registered while every task times out.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  _root_real="$(cd "$(dirname "$BRIDGE_ROOT")" 2>/dev/null && pwd -P || echo "$BRIDGE_ROOT")"
+  for _tcc in "$HOME/Documents" "$HOME/Desktop" "$HOME/Downloads"; do
+    if [[ "$_root_real" == "$_tcc" || "$_root_real" == "$_tcc"/* ]]; then
+      c_red "✗ BRIDGE_ROOT is inside $_tcc, which macOS protects with TCC."
+      echo "  launchd cannot start a daemon whose WorkingDirectory lives there —" >&2
+      echo "  it fails with EX_CONFIG before the daemon can log anything." >&2
+      echo >&2
+      echo "  Use a location outside Documents/Desktop/Downloads, e.g.:" >&2
+      echo "    BRIDGE_ROOT=\"\$HOME/.cowork-to-code-bridge\" bash install.sh" >&2
+      exit 1
+    fi
+  done
+fi
+
 step "Setting up $BRIDGE_ROOT"
 mkdir -p "$BRIDGE_ROOT"/{queue,results,processed,scripts}
 c_green "  ✓ directories created"
