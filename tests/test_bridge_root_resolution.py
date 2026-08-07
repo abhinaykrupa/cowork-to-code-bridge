@@ -221,10 +221,16 @@ def test_running_daemon_still_passes(monkeypatch, tmp_path):
 # tests exercise the guard logic directly rather than driving a full install
 # (which needs network and launchd).
 
+# The OS check is injected rather than read from the host, so these tests are
+# deterministic on every runner: CI must exercise BOTH the Darwin branch (where
+# the guard fires) and the non-Darwin branch (where it must stay out of the
+# way). Reading the real `uname` would silently skip half the contract on
+# whichever platform the job happens to run on.
 _GUARD = r'''
 BRIDGE_ROOT="$1"
+_OS="$2"
 c_red() { printf "%s\n" "$1"; }
-if [[ "$(uname -s)" == "Darwin" ]]; then
+if [[ "$_OS" == "Darwin" ]]; then
   _root_real="$(cd "$(dirname "$BRIDGE_ROOT")" 2>/dev/null && pwd -P || echo "$BRIDGE_ROOT")"
   for _tcc in "$HOME/Documents" "$HOME/Desktop" "$HOME/Downloads"; do
     if [[ "$_root_real" == "$_tcc" || "$_root_real" == "$_tcc"/* ]]; then
@@ -237,9 +243,9 @@ echo "accepted"
 '''
 
 
-def _run_guard(home: Path, root: Path):
+def _run_guard(home: Path, root: Path, os_name: str = "Darwin"):
     return subprocess.run(
-        ["bash", "-c", _GUARD, "bash", str(root)],
+        ["bash", "-c", _GUARD, "bash", str(root), os_name],
         env={"HOME": str(home), "PATH": "/usr/bin:/bin"},
         capture_output=True, text=True, timeout=30,
     )
@@ -247,19 +253,33 @@ def _run_guard(home: Path, root: Path):
 
 @pytest.mark.parametrize("sub", ["Documents", "Desktop", "Downloads"])
 def test_guard_refuses_tcc_protected_root(sub, tmp_path):
-    """A root inside any TCC-protected folder is refused."""
+    """On macOS, a root inside any TCC-protected folder is refused."""
     root = tmp_path / sub / "bridge"
     root.parent.mkdir(parents=True)
-    proc = _run_guard(tmp_path, root)
+    proc = _run_guard(tmp_path, root, os_name="Darwin")
     assert proc.returncode != 0
     assert "TCC" in proc.stdout + proc.stderr
+
+
+@pytest.mark.parametrize("sub", ["Documents", "Desktop", "Downloads"])
+def test_guard_is_a_noop_off_macos(sub, tmp_path):
+    """Off macOS the guard must not fire — TCC is a macOS-only mechanism.
+
+    ~/Documents carries no such restriction on Linux, and there is no launchd
+    to fail. Refusing there would break perfectly valid Linux installs.
+    """
+    root = tmp_path / sub / "bridge"
+    root.parent.mkdir(parents=True)
+    proc = _run_guard(tmp_path, root, os_name="Linux")
+    assert proc.returncode == 0, "TCC guard must not fire off macOS"
+    assert "accepted" in proc.stdout
 
 
 def test_guard_accepts_a_safe_root(tmp_path):
     """Negative control: a normal root under $HOME is accepted."""
     root = tmp_path / ".cowork-to-code-bridge"
     root.mkdir()
-    proc = _run_guard(tmp_path, root)
+    proc = _run_guard(tmp_path, root, os_name="Darwin")
     assert proc.returncode == 0
     assert "accepted" in proc.stdout
 
@@ -268,7 +288,7 @@ def test_guard_accepts_lookalike_sibling(tmp_path):
     """Negative control: 'DocumentsArchive' must not match 'Documents'."""
     root = tmp_path / "DocumentsArchive" / "bridge"
     root.parent.mkdir(parents=True)
-    proc = _run_guard(tmp_path, root)
+    proc = _run_guard(tmp_path, root, os_name="Darwin")
     assert proc.returncode == 0, "prefix match wrongly caught a sibling directory"
 
 
