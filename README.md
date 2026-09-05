@@ -217,6 +217,8 @@ You can [uninstall it completely with one command](#uninstall) at any time.
 
 ## What can I ask for?
 
+> **Not using Claude?** The daemon runs any allowlisted script — 23 of the 25 bundled ones have nothing to do with Claude, and any process that can write a JSON file can drive the host. See **[docs/WITHOUT_CLAUDE.md](https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/docs/WITHOUT_CLAUDE.md)**.
+
 **The main thing: hand a task to Claude Code on your Mac.** The install ships a script called `run_claude.sh` that does exactly this. From Cowork you say something like *"have Claude Code on my Mac run the tests and fix what breaks"* and a real Claude Code agent on your machine carries it out, then reports back. That's the headline feature — Cowork delegating to a full local agent.
 
 For copy-paste examples that map Cowork requests to the bundled scripts, see
