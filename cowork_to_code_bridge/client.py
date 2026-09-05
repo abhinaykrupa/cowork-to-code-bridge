@@ -28,10 +28,46 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import platform
+import re
 import time
 import uuid
 from pathlib import Path
 from typing import Any
+
+
+def _service_bridge_root() -> Path | None:
+    """BRIDGE_ROOT the installed daemon service actually serves, if any.
+
+    Mirrors selfcheck's resolution so the client and the daemon cannot disagree
+    about which directory is the bridge. Returns None when no service file is
+    present or it cannot be parsed — callers fall back to the other candidates.
+    """
+    try:
+        system = platform.system()
+        if system == "Darwin":
+            plist = (Path.home() / "Library" / "LaunchAgents"
+                     / "dev.cowork-to-code-bridge.daemon.plist")
+            if not plist.is_file():
+                return None
+            import plistlib
+            with plist.open("rb") as fh:
+                env = plistlib.load(fh).get("EnvironmentVariables") or {}
+            root = env.get("BRIDGE_ROOT")
+            return Path(root) if root else None
+        if system == "Linux":
+            unit = (Path.home() / ".config" / "systemd" / "user"
+                    / "cowork-to-code-bridge.service")
+            if not unit.is_file():
+                return None
+            pat = re.compile(r'^\s*Environment=\s*"?BRIDGE_ROOT=([^"\n]+)"?\s*$')
+            for line in unit.read_text().splitlines():
+                m = pat.match(line)
+                if m:
+                    return Path(m.group(1).strip())
+    except Exception:
+        return None
+    return None
 
 
 def _resolve_bridge_root() -> Path:
@@ -45,9 +81,21 @@ def _resolve_bridge_root() -> Path:
     env = os.environ.get("BRIDGE_ROOT")
     if env:
         return Path(env)
+
+    # An installed daemon records the root it actually serves in its launchd
+    # plist / systemd unit. Prefer that over a $PWD/bridge directory, which may
+    # be a leftover from a previous install: writing a task into a directory no
+    # daemon is watching produces a 30s timeout that looks like a dead daemon.
+    svc = _service_bridge_root()
+    if svc is not None:
+        return svc
+
     cwd_bridge = Path.cwd() / "bridge"
     if cwd_bridge.exists():
         return cwd_bridge
+    default_root = Path.home() / ".cowork-to-code-bridge"
+    if default_root.exists():
+        return default_root
     # Fall back to package-relative (only useful for tests)
     return Path(__file__).resolve().parents[3] / "bridge"
 

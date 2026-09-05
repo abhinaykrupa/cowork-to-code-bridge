@@ -3,9 +3,7 @@
 [![CI](https://github.com/abhinaykrupa/cowork-to-code-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/abhinaykrupa/cowork-to-code-bridge/actions/workflows/ci.yml)
 [![selfcheck](https://github.com/abhinaykrupa/cowork-to-code-bridge/actions/workflows/selfcheck.yml/badge.svg)](https://github.com/abhinaykrupa/cowork-to-code-bridge/actions/workflows/selfcheck.yml)
 [![Homebrew](https://img.shields.io/badge/brew-abhinaykrupa%2Ftap-orange?logo=homebrew)](https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/docs/HOMEBREW.md)
-[![Python](https://img.shields.io/badge/python-%3E%3D3.10-blue?logo=python&logoColor=white)](https://pypi.org/project/cowork-to-code-bridge/)
-[![PyPI](https://img.shields.io/pypi/v/cowork-to-code-bridge)](https://pypi.org/project/cowork-to-code-bridge/)
-[![PyPI downloads](https://img.shields.io/pypi/dm/cowork-to-code-bridge)](https://pypi.org/project/cowork-to-code-bridge/)
+[![Python](https://img.shields.io/badge/python-%3E%3D3.10-blue?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Stars](https://img.shields.io/github/stars/abhinaykrupa/cowork-to-code-bridge?style=social)](https://github.com/abhinaykrupa/cowork-to-code-bridge/stargazers)
 [![Release](https://img.shields.io/github/v/release/abhinaykrupa/cowork-to-code-bridge?display_name=tag)](https://github.com/abhinaykrupa/cowork-to-code-bridge/releases)
 [![Downloads](https://img.shields.io/github/downloads/abhinaykrupa/cowork-to-code-bridge/total?logo=github)](https://github.com/abhinaykrupa/cowork-to-code-bridge/releases)
@@ -56,15 +54,17 @@ curl -fsSL https://raw.githubusercontent.com/abhinaykrupa/cowork-to-code-bridge/
 
 Wait ~30 seconds. It installs a small background helper (auto-restarts, reboot-safe) and a Claude skill. When it finishes it prints a **connect line with your real path filled in** — copy that exact line, or use the template below.
 
-Once the package is on PyPI, the installer prefers `pip install` from there (faster than the GitHub fallback).
+The installer installs the package from GitHub. (A PyPI release is planned; see [#41](https://github.com/abhinaykrupa/cowork-to-code-bridge/issues/41).)
 
 <details>
 <summary>Developers / pip (package only — not the full bridge setup)</summary>
 
 ```bash
-pip install cowork-to-code-bridge
+pip install git+https://github.com/abhinaykrupa/cowork-to-code-bridge
 cowork-to-code-bridge-selfcheck
 ```
+
+> Not on PyPI yet — install straight from GitHub with the command above.
 
 This installs the Python package and console scripts (`cowork-to-code-bridge-daemon`,
 `-uninstall`, `-selfcheck`). It does **not** set up launchd/systemd, the Cowork
