@@ -28,7 +28,7 @@ REPO="abhinaykrupa/cowork-to-code-bridge"
 BRIDGE_ROOT="$HOME/.cowork-to-code-bridge"
 PLIST="$HOME/Library/LaunchAgents/dev.cowork-to-code-bridge.daemon.plist"
 PACKAGE="cowork-to-code-bridge"
-PACKAGE_SPEC="cowork-to-code-bridge>=0.5.1"
+PACKAGE_SPEC="cowork-to-code-bridge>=0.6.0"
 DAEMON_LOG="$BRIDGE_ROOT/daemon.log"
 DAEMON_ERR="$BRIDGE_ROOT/daemon.err"
 
