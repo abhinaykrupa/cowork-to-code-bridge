@@ -6,6 +6,63 @@ All notable changes to this project. Format loosely follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-05
+
+Security, durability, and honesty-of-docs release. Two of these fix failures
+that were silently live on real installs.
+
+### Added
+- **Secret redaction on the write path (#76).** Task output is scrubbed before it
+  reaches the result file, progress log, or status line. The daemon's own
+  `BRIDGE_TOKEN` is redacted with certainty; vendor key prefixes, `Authorization:`
+  headers, inline URL passwords, private-key blocks, and long values assigned to
+  key-ish names are matched heuristically. `BRIDGE_REDACT=0` disables it.
+  Best-effort by design — see SECURITY.md.
+- **Queue-age expiry (#77).** `max_age_sec` bounds how long a task may *wait*, not
+  just run. A daemon that was asleep no longer executes an hours-stale backlog on
+  restart; expired tasks get a normal result with `exit_code=-6`.
+- **Real task cancellation.** `cancel_task` signals the whole process group
+  (SIGTERM, then SIGKILL after a grace period) instead of setting a flag that
+  nothing read.
+- **Bounded task output.** stdout/stderr are capped while streaming, keeping the
+  tail, with `stdout_truncated` / `stdout_total_bytes` on the result.
+- **[docs/WITHOUT_CLAUDE.md](docs/WITHOUT_CLAUDE.md).** The bridge driven with no
+  Claude in the loop — the directory protocol, plain-Python and pure-shell
+  clients, and how to add your own script. 23 of the 25 bundled scripts have
+  nothing to do with Claude; nothing demonstrated that until now.
+
+### Fixed
+- **TCC-protected `BRIDGE_ROOT` bricked launchd (#83).** A root under
+  `~/Documents`, `~/Desktop` or `~/Downloads` is unstartable by launchd on macOS
+  13+: the shell has TCC consent, launchd does not, so it dies with EX_CONFIG (78)
+  *before* Python starts — no log output at all, while `KeepAlive` respawns it
+  forever. Selfcheck now reads the root the daemon actually serves, names the TCC
+  cause, and `install.sh` refuses such a root up front.
+- **Client resolved a stale `$PWD/bridge` (#84).** Tasks were written into a
+  leftover directory no daemon watches, producing a 30s timeout whose error
+  blamed the daemon. All three client copies now prefer the installed service's
+  root. An explicit `BRIDGE_ROOT` still wins.
+- **Documented `pip install` 404'd, and two README badges rendered
+  "package or version not found"** — the package has never been published (#41).
+  The badges are gone and the developer install is the `git+https` form, verified
+  end-to-end in a clean venv.
+- **Package client was missing two documented functions (#79)**, so a documented
+  import raised `ImportError`.
+
+### Changed
+- **README leads with earned coverage.** The eight framework discussions
+  (9 upvotes and 0 comments between them) are demoted to a prose line; a
+  **Featured in** section names the two listings that actually merged —
+  [Awesome Agentic Patterns](https://www.agentic-patterns.com/patterns/filesystem-mediated-host-delegation/)
+  (which catalogued this architecture as a named pattern) and
+  agentic-awesome-skills.
+
+### Internal
+- Parity guards against silent cross-surface drift: routing tables (#80),
+  `install.sh` heredoc *content* (#81), exit-code docs (#82), and the version
+  string itself, which lives in seven files.
+
+
 ### Added
 - **Permission-scope ceiling enforcement (#47).** The owner can now set
   `BRIDGE_PERMISSION_CEILING` (`plan` < `readonly` < `edit` < `full`); a caller's

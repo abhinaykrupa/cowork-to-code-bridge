@@ -169,7 +169,7 @@ class MCPServer:
             "capabilities": {},
             "serverInfo": {
                 "name": "cowork-to-code-bridge",
-                "version": "0.5.1",
+                "version": "0.6.0",
             },
         }
 
