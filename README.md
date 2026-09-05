@@ -572,20 +572,24 @@ Developers: the full crash-recovery model (the journal, in-flight markers, and t
 
 ---
 
-## Community & Discussions
+## Featured in
 
-Active in these framework communities:
+Independent, third-party coverage — not self-submitted listings awaiting review:
 
-| Community | Topic |
-|-----------|-------|
-| [AutoGen Discussions](https://github.com/microsoft/autogen/discussions/7868) | Async local execution for AutoGen agents |
-| [CrewAI Discussions](https://github.com/crewAIInc/crewAI/discussions) | Production-safe local code execution for crews |
-| [LiteLLM Discussions](https://github.com/BerriAI/litellm/discussions/30841) | LiteLLM → Claude Code bridge pattern |
-| [LlamaIndex Discussions](https://github.com/run-llama/llama_index/discussions/22045) | LlamaIndex local executor tool |
-| [Agno Discussions](https://github.com/agno-agi/agno/discussions/8486) | Multi-agent local execution pattern |
-| [Anthropic SDK Discussions](https://github.com/anthropics/anthropic-sdk-python/discussions/1688) | Remote agent → local Claude Code delegation |
-| [MCP Spec Issue #2925](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/2925) | Stateful async operation pattern |
-| [Hermes Agent #47199](https://github.com/NousResearch/hermes-agent/issues/47199) | Subprocess MCP bridge for Hermes |
+| Where | What |
+|-------|------|
+| **[Awesome Agentic Patterns](https://www.agentic-patterns.com/patterns/filesystem-mediated-host-delegation/)** (4.9k★) | The architecture here is catalogued as a named pattern — *Filesystem-Mediated Host Delegation* — with the bridge as its reference implementation |
+| **[agentic-awesome-skills](https://github.com/sickn33/agentic-awesome-skills)** (46k★) | Listed as a Claude skill |
+
+## Community
+
+Design discussions on the async-delegation pattern are open in several agent
+frameworks — [AutoGen](https://github.com/microsoft/autogen/discussions/7868),
+[LiteLLM](https://github.com/BerriAI/litellm/discussions/30841),
+[LlamaIndex](https://github.com/run-llama/llama_index/discussions/22045),
+[Agno](https://github.com/agno-agi/agno/discussions/8486) — plus the
+[MCP spec](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/2925)
+on stateful async operations. Contributions and counter-arguments welcome.
 
 ---
 
