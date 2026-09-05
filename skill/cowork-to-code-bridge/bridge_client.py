@@ -30,6 +30,8 @@ from __future__ import annotations
 
 import json
 import os
+import platform
+import re
 import time
 import uuid
 from pathlib import Path
@@ -38,14 +40,51 @@ from typing import Any
 __version__ = "0.5.1"
 
 
+def _service_bridge_root() -> Path | None:
+    """BRIDGE_ROOT the installed daemon serves (launchd plist / systemd unit)."""
+    try:
+        system = platform.system()
+        if system == "Darwin":
+            plist = (Path.home() / "Library" / "LaunchAgents"
+                     / "dev.cowork-to-code-bridge.daemon.plist")
+            if not plist.is_file():
+                return None
+            import plistlib
+            with plist.open("rb") as fh:
+                env = plistlib.load(fh).get("EnvironmentVariables") or {}
+            root = env.get("BRIDGE_ROOT")
+            return Path(root) if root else None
+        if system == "Linux":
+            unit = (Path.home() / ".config" / "systemd" / "user"
+                    / "cowork-to-code-bridge.service")
+            if not unit.is_file():
+                return None
+            pat = re.compile(r'^\s*Environment=\s*"?BRIDGE_ROOT=([^"\n]+)"?\s*$')
+            for line in unit.read_text().splitlines():
+                m = pat.match(line)
+                if m:
+                    return Path(m.group(1).strip())
+    except Exception:
+        return None
+    return None
+
+
 def _resolve_bridge_root() -> Path:
     """Find the bridge directory. Order: $BRIDGE_ROOT, $PWD/bridge, ./bridge."""
     env = os.environ.get("BRIDGE_ROOT")
     if env:
         return Path(env)
+    # Prefer the root an installed daemon actually serves: a stale $PWD/bridge
+    # from an earlier install silently swallows tasks and times out.
+    svc = _service_bridge_root()
+    if svc is not None:
+        return svc
     cwd_bridge = Path.cwd() / "bridge"
     if cwd_bridge.exists():
         return cwd_bridge
+    default_root = Path.home() / ".cowork-to-code-bridge"
+    if default_root.exists():
+        return default_root
     return Path.cwd() / "bridge"
 
 
