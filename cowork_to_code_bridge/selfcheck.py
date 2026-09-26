@@ -153,6 +153,32 @@ def check_token() -> tuple[bool, str]:
     return False, f"BRIDGE_TOKEN not found in {env_file}"
 
 
+def _manual_daemon_pid() -> int | None:
+    """PID of a running manual (setsid) bridge daemon, verified, or None.
+
+    The pidfile lives in BRIDGE_ROOT, which the sandbox can write, so a bare
+    "that pid is alive" proves nothing. On Linux, /proc/<pid>/cmdline must show
+    the bridge daemon module.
+    """
+    try:
+        pid = int((BRIDGE_ROOT / "daemon.pid").read_text().strip())
+        os.kill(pid, 0)
+    except (OSError, ValueError):
+        return None
+    cmdline = Path(f"/proc/{pid}/cmdline")
+    if cmdline.exists():
+        try:
+            cmd = cmdline.read_bytes()
+            # The installer prefers the console script (`cowork-to-code-bridge-daemon`)
+            # and falls back to `python -m cowork_to_code_bridge.daemon`.
+            if not any(s in cmd for s in (b"cowork-to-code-bridge-daemon",
+                                          b"cowork_to_code_bridge.daemon")):
+                return None
+        except OSError:
+            return None
+    return pid
+
+
 def check_daemon_registered() -> tuple[bool, str]:
     """3. Daemon registered with launchd (macOS) or systemd --user (Linux)."""
     system = platform.system()
@@ -193,6 +219,7 @@ def check_daemon_registered() -> tuple[bool, str]:
             return False, "launchctl not found"
 
     if system == "Linux":
+        status = ""
         try:
             result = subprocess.run(
                 ["systemctl", "--user", "is-active", SYSTEMD_UNIT],
@@ -202,10 +229,17 @@ def check_daemon_registered() -> tuple[bool, str]:
             status = result.stdout.strip()
             if status == "active":
                 return True, "systemd --user: active"
-            hint = f"try: systemctl --user start {SYSTEMD_UNIT}"
-            return False, f"systemd --user: {status or 'unknown'} — {hint}"
         except FileNotFoundError:
-            return False, "systemctl not found"
+            status = "systemctl not found"
+        # No systemd user bus (containers, CI, minimal distros, some WSL): the
+        # installer falls back to a setsid daemon with a pidfile. Before this,
+        # every such install was reported as FAIL while working fine.
+        pid = _manual_daemon_pid()
+        if pid is not None:
+            return True, f"manual daemon (no systemd): running (pid {pid})"
+        hint = (f"try: systemctl --user start {SYSTEMD_UNIT}, or re-run the "
+                f"installer to start the manual daemon")
+        return False, f"systemd --user: {status or 'unknown'}; no manual daemon — {hint}"
 
     return False, f"unsupported OS: {system}"
 
@@ -243,8 +277,13 @@ def check_ping() -> tuple[bool, str]:
     )
 
 
-def check_claude_cli() -> tuple[bool, str]:
-    """6. claude CLI resolves on PATH or known install locations."""
+def check_claude_cli() -> tuple[bool | None, str]:
+    """6. claude CLI resolves on PATH or known install locations.
+
+    Advisory (WARN, not FAIL) when missing: only run_claude.sh and
+    escalate_to_claude.sh need it, and the other bundled scripts work without
+    it — see docs/WITHOUT_CLAUDE.md.
+    """
     # Check PATH first
     found = shutil.which("claude")
     if found:
@@ -269,8 +308,10 @@ def check_claude_cli() -> tuple[bool, str]:
         if p.exists() and os.access(p, os.X_OK):
             return True, f"{p} (not on PATH — add it to ~/.zshrc or ~/.bashrc)"
 
-    return False, (
-        "claude CLI not found. Install it: curl -fsSL https://claude.ai/install.sh | bash"
+    return None, (
+        "not found — only run_claude.sh and escalate_to_claude.sh need it; the rest "
+        "of the bridge works without it."
+        "\n         Install: curl -fsSL https://claude.ai/install.sh | bash"
         "\n         (The Claude Desktop app alone is not enough — the CLI is separate.)"
     )
 
@@ -298,9 +339,11 @@ def run_checks() -> int:
         except Exception as exc:  # noqa: BLE001
             ok, detail = False, f"unexpected error: {exc}"
 
-        status = _green("PASS") if ok else _red("FAIL")
+        # ok is True (PASS), False (FAIL), or None (WARN: advisory, not a failure).
+        status = {True: _green("PASS"), False: _red("FAIL"), None: _yellow("WARN")}[
+            None if ok is None else bool(ok)]
         print(f"  {label:<{width}}  [{status}]  {detail}")
-        if not ok:
+        if ok is False:
             failures += 1
 
     return failures

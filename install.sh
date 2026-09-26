@@ -26,9 +26,35 @@ trap 'echo "✗ Install failed at line $LINENO. Run cowork-to-code-bridge-uninst
 
 REPO="abhinaykrupa/cowork-to-code-bridge"
 BRIDGE_ROOT="$HOME/.cowork-to-code-bridge"
+
+# ─── Layout: default vs hardened ─────────────────────────────────────────────
+# Cowork mounts BRIDGE_ROOT read-write, so in the DEFAULT layout the sandbox can
+# add scripts to the allowlist itself. BRIDGE_HARDENED=1 keeps the allowlist,
+# and anything else the host executes, OUTSIDE the mount — see SECURITY.md,
+# "Default vs hardened layout".
+#   BRIDGE_HARDENED=1 bash install.sh
+#   BRIDGE_HARDENED=1 BRIDGE_SCRIPTS_DIR=/some/dir bash install.sh
+bridge_layout() {
+  # Prints: "<scripts_dir>|<host_state_dir>" for the chosen layout.
+  local root="$1" hardened="${2:-0}" scripts_override="${3:-}"
+  if [[ "$hardened" == "1" ]]; then
+    local sd="${scripts_override:-$HOME/.bridge-scripts}"
+    printf '%s|%s\n' "$sd" "${XDG_DATA_HOME:-$HOME/.local/share}/cowork-to-code-bridge"
+  else
+    printf '%s|%s\n' "$root/scripts" "$root"
+  fi
+}
+_LAYOUT="$(bridge_layout "$BRIDGE_ROOT" "${BRIDGE_HARDENED:-0}" "${BRIDGE_SCRIPTS_DIR:-}")"
+SCRIPTS_DIR="${_LAYOUT%%|*}"
+HOST_STATE_DIR="${_LAYOUT##*|}"   # files the host executes (reboot starter)
+SCRIPTS_MARKER=".cowork-to-code-bridge-scripts"
+# Export under the name the daemon reads, so EVERY start path — launchd, systemd,
+# and the manual start this script performs directly — serves the same dir. The
+# service definitions also carry it, but the first manual start happens here.
+export BRIDGE_SCRIPTS="$SCRIPTS_DIR"
 PLIST="$HOME/Library/LaunchAgents/dev.cowork-to-code-bridge.daemon.plist"
 PACKAGE="cowork-to-code-bridge"
-PACKAGE_SPEC="cowork-to-code-bridge>=0.6.2"
+PACKAGE_SPEC="cowork-to-code-bridge>=0.7.0"
 DAEMON_LOG="$BRIDGE_ROOT/daemon.log"
 DAEMON_ERR="$BRIDGE_ROOT/daemon.err"
 
@@ -389,7 +415,20 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
 fi
 
 step "Setting up $BRIDGE_ROOT"
-mkdir -p "$BRIDGE_ROOT"/{queue,results,processed,scripts}
+mkdir -p "$BRIDGE_ROOT"/{queue,results,processed}
+mkdir -p "$SCRIPTS_DIR"
+chmod 700 "$SCRIPTS_DIR" 2>/dev/null || true
+if [[ "$SCRIPTS_DIR" != "$BRIDGE_ROOT/scripts" ]]; then
+  # Hardened: the marker lets the uninstaller remove this directory — and ONLY a
+  # directory carrying it — without ever rm -rf'ing a path a user chose.
+  : > "$SCRIPTS_DIR/$SCRIPTS_MARKER"
+  c_green "  ✓ hardened layout: allowlisted scripts in $SCRIPTS_DIR (outside the Cowork mount)"
+  if compgen -G "$BRIDGE_ROOT/scripts/*.sh" >/dev/null; then
+    c_yellow "  ! $BRIDGE_ROOT/scripts/ still holds scripts from a default-layout install."
+    echo "    The daemon no longer runs them. Copy any of your own into $SCRIPTS_DIR," >&2
+    echo "    then delete that folder: rm -rf \"$BRIDGE_ROOT/scripts\"" >&2
+  fi
+fi
 c_green "  ✓ directories created"
 
 # ─── 4. Token ────────────────────────────────────────────────────────────────
@@ -426,16 +465,16 @@ fi
 
 # ─── 5. Starter scripts ──────────────────────────────────────────────────────
 step "Installing starter scripts"
-cat > "$BRIDGE_ROOT/scripts/ping.sh" <<'PING'
+cat > "$SCRIPTS_DIR/ping.sh" <<'PING'
 #!/usr/bin/env bash
 # ping.sh — minimal health check. Used by daemon_alive() from the client.
 echo "OK"
 echo "pwd: $(pwd)"
 echo "ts: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 PING
-chmod +x "$BRIDGE_ROOT/scripts/ping.sh"
+chmod +x "$SCRIPTS_DIR/ping.sh"
 
-cat > "$BRIDGE_ROOT/scripts/hello.sh" <<'HELLO'
+cat > "$SCRIPTS_DIR/hello.sh" <<'HELLO'
 #!/usr/bin/env bash
 # Example whitelisted script. Save as ~/.cowork-to-code-bridge/scripts/hello.sh
 # and chmod +x. Then call from Cowork:
@@ -444,10 +483,10 @@ echo "hello from $(hostname) — args: $*"
 echo "pwd: $(pwd)"
 echo "ts:  $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 HELLO
-chmod +x "$BRIDGE_ROOT/scripts/hello.sh"
+chmod +x "$SCRIPTS_DIR/hello.sh"
 
 # run_claude.sh — THE bridge's purpose: hand a task to Claude Code on the Mac.
-cat > "$BRIDGE_ROOT/scripts/run_claude.sh" <<'RUNCLAUDE'
+cat > "$SCRIPTS_DIR/run_claude.sh" <<'RUNCLAUDE'
 #!/usr/bin/env bash
 # run_claude.sh — the heart of the bridge: hand a task to Claude Code on the Mac.
 #
@@ -638,13 +677,13 @@ fi
 
 exec "$CLAUDE_BIN" "${EXTRA_FLAGS[@]}" "${MODEL_FLAGS[@]}" "${EFFORT_FLAGS[@]}" "${BUDGET_FLAGS[@]}" -p "$TASK" --output-format text
 RUNCLAUDE
-chmod +x "$BRIDGE_ROOT/scripts/run_claude.sh"
+chmod +x "$SCRIPTS_DIR/run_claude.sh"
 
 # ─── System-info scripts: let Cowork check the Mac directly ──────────────────
 # These answer "check my Mac's health / RAM / disk / processes / network" with
 # real data, fast, without invoking the agent. This is the thing Cowork can't
 # do on its own — the bridge makes it possible.
-cat > "$BRIDGE_ROOT/scripts/mac_health.sh" <<'MH'
+cat > "$SCRIPTS_DIR/mac_health.sh" <<'MH'
 #!/usr/bin/env bash
 # mac_health.sh — full health snapshot of this machine (macOS or Linux).
 #
@@ -751,7 +790,7 @@ else
 fi
 exit 0
 MH
-cat > "$BRIDGE_ROOT/scripts/mac_ram.sh" <<'MR'
+cat > "$SCRIPTS_DIR/mac_ram.sh" <<'MR'
 #!/usr/bin/env bash
 # mac_ram.sh — RAM usage summary (macOS or Linux).
 #
@@ -800,7 +839,7 @@ else
 fi
 exit 0
 MR
-cat > "$BRIDGE_ROOT/scripts/mac_disk.sh" <<'MD'
+cat > "$SCRIPTS_DIR/mac_disk.sh" <<'MD'
 #!/usr/bin/env bash
 # mac_disk.sh — disk usage (fast). Args: [path] [--json]   (path default /).
 #   (no flag)   human-readable text (default)
@@ -835,7 +874,7 @@ else
 fi
 exit 0
 MD
-cat > "$BRIDGE_ROOT/scripts/mac_top.sh" <<'MT'
+cat > "$SCRIPTS_DIR/mac_top.sh" <<'MT'
 #!/usr/bin/env bash
 # mac_top.sh — top processes by CPU and memory (macOS or Linux).
 # Args: [count] [--json]   (count default 15).
@@ -873,7 +912,7 @@ else
 fi
 exit 0
 MT
-cat > "$BRIDGE_ROOT/scripts/mac_network.sh" <<'MN'
+cat > "$SCRIPTS_DIR/mac_network.sh" <<'MN'
 #!/usr/bin/env bash
 # mac_network.sh — network status (macOS or Linux). Args: [--json]
 #   (no flag)   human-readable text (default)
@@ -940,7 +979,7 @@ else
 fi
 exit 0
 MN
-cat > "$BRIDGE_ROOT/scripts/port_check.sh" <<'PC'
+cat > "$SCRIPTS_DIR/port_check.sh" <<'PC'
 #!/usr/bin/env bash
 # port_check.sh — show what is listening on a TCP port (macOS or Linux).
 # Usage: port_check.sh PORT [--json]
@@ -1016,7 +1055,7 @@ fi
 
 exit 0
 PC
-cat > "$BRIDGE_ROOT/scripts/docker_ps.sh" <<'DPS'
+cat > "$SCRIPTS_DIR/docker_ps.sh" <<'DPS'
 #!/usr/bin/env bash
 # docker_ps.sh — list running Docker containers (macOS or Linux).
 # Usage: docker_ps.sh [--json]
@@ -1073,7 +1112,7 @@ docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
 
 exit 0
 DPS
-cat > "$BRIDGE_ROOT/scripts/docker_logs.sh" <<'DLG'
+cat > "$SCRIPTS_DIR/docker_logs.sh" <<'DLG'
 #!/usr/bin/env bash
 # docker_logs.sh — tail a container's logs (macOS or Linux).
 # Args: $1 = container name/ID (required), $2 = line count (optional, default 50).
@@ -1118,7 +1157,7 @@ docker logs --tail "$LINES" "$CONTAINER"
 
 exit 0
 DLG
-cat > "$BRIDGE_ROOT/scripts/git_status.sh" <<'GS'
+cat > "$SCRIPTS_DIR/git_status.sh" <<'GS'
 #!/usr/bin/env bash
 # Example: git status in any repo directory.
 #
@@ -1238,7 +1277,7 @@ printf '{"repo":"%s","branch":"%s","upstream":"%s","ahead":%s,"behind":%s,"clean
   "$(json_escape "$upstream")" \
   "${ahead:-0}" "${behind:-0}" "$clean" "$files_json"
 GS
-cat > "$BRIDGE_ROOT/scripts/list_scripts.sh" <<'LS'
+cat > "$SCRIPTS_DIR/list_scripts.sh" <<'LS'
 #!/usr/bin/env bash
 # list_scripts.sh — list every script the bridge can run, with its one-line description.
 # Lets Cowork discover what's available instead of guessing.
@@ -1300,7 +1339,7 @@ done
 [ "$found" -eq 0 ] && echo "  (no scripts found in $DIR)"
 exit 0
 LS
-cat > "$BRIDGE_ROOT/scripts/env_check.sh" <<'EC'
+cat > "$SCRIPTS_DIR/env_check.sh" <<'EC'
 #!/usr/bin/env bash
 # env_check.sh — show the environment values Cowork and Claude Code care about.
 # Never prints secret VALUES (only whether they are set).
@@ -1375,7 +1414,7 @@ printf '%-13s: %s\n' "OS" "$OS_DESC"
 printf '%-13s: %s\n' "claude CLI" "${claude_path:-not found on PATH}"
 exit 0
 EC
-cat > "$BRIDGE_ROOT/scripts/disk_hogs.sh" <<'DH'
+cat > "$SCRIPTS_DIR/disk_hogs.sh" <<'DH'
 #!/usr/bin/env bash
 # disk_hogs.sh — biggest files and folders in a directory (default: home).
 # Args: [path] [count] [--json]   e.g. call_remote("scripts/disk_hogs.sh", args=["~/Downloads","15"])
@@ -1433,7 +1472,7 @@ else
 fi
 exit 0
 DH
-cat > "$BRIDGE_ROOT/scripts/open_browser.sh" <<'OB'
+cat > "$SCRIPTS_DIR/open_browser.sh" <<'OB'
 #!/usr/bin/env bash
 # open_browser.sh — open a URL in the machine's default browser.
 # Args: <url>   e.g. call_remote("scripts/open_browser.sh", args=["http://localhost:3000"])
@@ -1458,7 +1497,7 @@ else
 fi
 exit 0
 OB
-cat > "$BRIDGE_ROOT/scripts/pkg_outdated.sh" <<'POD'
+cat > "$SCRIPTS_DIR/pkg_outdated.sh" <<'POD'
 #!/usr/bin/env bash
 # pkg_outdated.sh — list outdated system packages (macOS or Linux).
 # Detects the package manager: brew on macOS; apt/dnf/yum/pacman on Linux.
@@ -1545,7 +1584,7 @@ exit 0
 POD
 # request_cowork.sh — REVERSE direction: hand a request from this machine to a
 # Cowork session (async inbox; Cowork picks it up next time one is open).
-cat > "$BRIDGE_ROOT/scripts/request_cowork.sh" <<'REQCW'
+cat > "$SCRIPTS_DIR/request_cowork.sh" <<'REQCW'
 #!/usr/bin/env bash
 # request_cowork.sh — REVERSE direction: hand a request from this machine
 # (Claude Code) to a Claude Cowork session.
@@ -1639,18 +1678,18 @@ if [[ "$WAIT" -gt 0 ]]; then
   exit 1
 fi
 REQCW
-chmod +x "$BRIDGE_ROOT/scripts/request_cowork.sh"
+chmod +x "$SCRIPTS_DIR/request_cowork.sh"
 mkdir -p "$BRIDGE_ROOT/to_cowork" "$BRIDGE_ROOT/cowork_results"
 chmod 700 "$BRIDGE_ROOT/to_cowork" "$BRIDGE_ROOT/cowork_results" 2>/dev/null || true
 
-chmod +x "$BRIDGE_ROOT"/scripts/mac_*.sh "$BRIDGE_ROOT/scripts/port_check.sh" "$BRIDGE_ROOT/scripts/docker_ps.sh" "$BRIDGE_ROOT/scripts/docker_logs.sh" "$BRIDGE_ROOT/scripts/pkg_outdated.sh" "$BRIDGE_ROOT/scripts/git_status.sh" "$BRIDGE_ROOT/scripts/list_scripts.sh" "$BRIDGE_ROOT/scripts/env_check.sh" "$BRIDGE_ROOT/scripts/disk_hogs.sh" "$BRIDGE_ROOT/scripts/open_browser.sh"
+chmod +x "$SCRIPTS_DIR"/mac_*.sh "$SCRIPTS_DIR/port_check.sh" "$SCRIPTS_DIR/docker_ps.sh" "$SCRIPTS_DIR/docker_logs.sh" "$SCRIPTS_DIR/pkg_outdated.sh" "$SCRIPTS_DIR/git_status.sh" "$SCRIPTS_DIR/list_scripts.sh" "$SCRIPTS_DIR/env_check.sh" "$SCRIPTS_DIR/disk_hogs.sh" "$SCRIPTS_DIR/open_browser.sh"
 
 # process_kill.sh — terminate a named process or PID from Cowork.
 # Safety guards: refuses PID ≤ 10, refuses protected names (launchd/kernel_task/
 # systemd/init/kernel/kthreadd), refuses >1 name match unless --all is passed.
 # Sends SIGTERM (graceful); never SIGKILL.
 # Testability: BRIDGE_PGREP_CMD / BRIDGE_KILL_CMD env vars let tests inject fakes.
-cat > "$BRIDGE_ROOT/scripts/process_kill.sh" <<'PK'
+cat > "$SCRIPTS_DIR/process_kill.sh" <<'PK'
 #!/usr/bin/env bash
 # process_kill.sh — terminate a named process or PID on this machine.
 #
@@ -1839,13 +1878,13 @@ else
   exit 1
 fi
 PK
-chmod +x "$BRIDGE_ROOT/scripts/process_kill.sh"
+chmod +x "$SCRIPTS_DIR/process_kill.sh"
 
 # ── escalate_to_claude.sh ─────────────────────────────────────────────────────
 # REVERSE direction, for external agents (Hermes, cron, CI): hand a task to a
 # Claude Code/Cowork session via the to_cowork inbox, optionally waiting for a
 # reply. Same queue as request_cowork.sh, but tagged from an escalation daemon.
-cat > "$BRIDGE_ROOT/scripts/escalate_to_claude.sh" <<'ESCALATE'
+cat > "$SCRIPTS_DIR/escalate_to_claude.sh" <<'ESCALATE'
 #!/usr/bin/env bash
 # escalate_to_claude.sh — hand a complex task from a daemon/agent to Claude Code
 # on your machine, using your subscription (no token needed).
@@ -1941,10 +1980,10 @@ if [[ "$WAIT" -gt 0 ]]; then
   exit 0
 fi
 ESCALATE
-chmod +x "$BRIDGE_ROOT/scripts/escalate_to_claude.sh"
+chmod +x "$SCRIPTS_DIR/escalate_to_claude.sh"
 
 # ── mcp_proxy.sh ──────────────────────────────────────────────────────────────
-cat > "$BRIDGE_ROOT/scripts/mcp_proxy.sh" <<'MCPPROXY'
+cat > "$SCRIPTS_DIR/mcp_proxy.sh" <<'MCPPROXY'
 #!/usr/bin/env bash
 # mcp_proxy.sh — relay a single MCP JSON-RPC call to a local stdio MCP server
 # and return the response through the bridge queue.
@@ -2179,10 +2218,10 @@ if result is None:
 print(json.dumps(result))
 PYEOF
 MCPPROXY
-chmod +x "$BRIDGE_ROOT/scripts/mcp_proxy.sh"
+chmod +x "$SCRIPTS_DIR/mcp_proxy.sh"
 
 # ── mcp_register.sh ───────────────────────────────────────────────────────────
-cat > "$BRIDGE_ROOT/scripts/mcp_register.sh" <<'MCPREG'
+cat > "$SCRIPTS_DIR/mcp_register.sh" <<'MCPREG'
 #!/usr/bin/env bash
 # mcp_register.sh — register a local stdio MCP server in the bridge registry.
 #
@@ -2329,10 +2368,10 @@ print(f"  Registry: {registry_path}")
 print(f"  Total servers: {len(registry)}")
 PYEOF
 MCPREG
-chmod +x "$BRIDGE_ROOT/scripts/mcp_register.sh"
+chmod +x "$SCRIPTS_DIR/mcp_register.sh"
 
 # ── mcp_list_servers.sh ───────────────────────────────────────────────────────
-cat > "$BRIDGE_ROOT/scripts/mcp_list_servers.sh" <<'MCPLIST'
+cat > "$SCRIPTS_DIR/mcp_list_servers.sh" <<'MCPLIST'
 #!/usr/bin/env bash
 # mcp_list_servers.sh — list all MCP servers registered in the bridge registry.
 #
@@ -2413,7 +2452,7 @@ print(f"\nRegistry: {registry_path}")
 print(f"Use mcp_proxy.sh to call any of these from Cowork.")
 PYEOF
 MCPLIST
-chmod +x "$BRIDGE_ROOT/scripts/mcp_list_servers.sh"
+chmod +x "$SCRIPTS_DIR/mcp_list_servers.sh"
 
 
 # mcp_audit.sh — cross-surface MCP audit.
@@ -2421,7 +2460,7 @@ chmod +x "$BRIDGE_ROOT/scripts/mcp_list_servers.sh"
 # MCPs registered in local Claude Code vs what a Cowork session can reach.
 # This script runs on the machine side; Cowork receives the JSON output and
 # can diff it against its own session's available connectors/plugins.
-cat > "$BRIDGE_ROOT/scripts/mcp_audit.sh" <<'MCPAUDIT'
+cat > "$SCRIPTS_DIR/mcp_audit.sh" <<'MCPAUDIT'
 #!/usr/bin/env bash
 # mcp_audit.sh — enumerate MCPs registered in local Claude Code (all scopes).
 #
@@ -2504,7 +2543,7 @@ print(json.dumps({
 PY
 fi
 MCPAUDIT
-chmod +x "$BRIDGE_ROOT/scripts/mcp_audit.sh"
+chmod +x "$SCRIPTS_DIR/mcp_audit.sh"
 
 
 c_green "  ✓ scripts installed: ping, hello, run_claude, mac_health, mac_ram, mac_disk, mac_top, mac_network, port_check, docker_ps, docker_logs, pkg_outdated, git_status, list_scripts, env_check, disk_hogs, open_browser, request_cowork, process_kill, mcp_proxy, mcp_register, mcp_list_servers, mcp_audit"
@@ -2688,6 +2727,7 @@ if [[ "$SERVICE_MGR" == "launchd" ]]; then
     echo '  <key>EnvironmentVariables</key>'
     echo '  <dict>'
     echo "    <key>BRIDGE_ROOT</key><string>$BRIDGE_ROOT</string>"
+    echo "    <key>BRIDGE_SCRIPTS</key><string>$SCRIPTS_DIR</string>"
     echo "    <key>PATH</key><string>$USER_SCRIPTS_DIR:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>"
     echo '  </dict>'
     echo '  <key>RunAtLoad</key><true/>'
@@ -2742,6 +2782,7 @@ elif [[ "$SERVICE_MGR" == "systemd" ]]; then
     echo '[Service]'
     echo 'Type=simple'
     echo "Environment=BRIDGE_ROOT=$BRIDGE_ROOT"
+    echo "Environment=BRIDGE_SCRIPTS=$SCRIPTS_DIR"
     echo "Environment=PATH=$USER_SCRIPTS_DIR:/usr/local/bin:/usr/bin:/bin"
     echo "WorkingDirectory=$BRIDGE_ROOT"
     echo "ExecStart=/bin/sh -lc \"exec $EXECSTART\""
@@ -2786,26 +2827,31 @@ elif [[ "$SERVICE_MGR" == "systemd" ]]; then
 
 else
   # ── Linux: manual daemon (no systemd user bus) ───────────────────────────
-  mkdir -p "$BRIDGE_ROOT/lib"
+  # The reboot starter and the library it sources are EXECUTED by the host, so
+  # in the hardened layout they live outside the sandbox-writable mount.
+  mkdir -p "$HOST_STATE_DIR/lib"
   if [[ -n "$_INSTALL_DIR" && -f "$_INSTALL_DIR/scripts/lib/daemon_service.sh" ]]; then
-    cp "$_INSTALL_DIR/scripts/lib/daemon_service.sh" "$BRIDGE_ROOT/lib/daemon_service.sh"
+    cp "$_INSTALL_DIR/scripts/lib/daemon_service.sh" "$HOST_STATE_DIR/lib/daemon_service.sh"
   elif ! curl -fsSL "https://raw.githubusercontent.com/$REPO/main/scripts/lib/daemon_service.sh" \
-      -o "$BRIDGE_ROOT/lib/daemon_service.sh" 2>/dev/null; then
+      -o "$HOST_STATE_DIR/lib/daemon_service.sh" 2>/dev/null; then
     c_red "  ✗ could not install daemon_service.sh (offline?)"
     exit 1
   fi
   if ! declare -F bridge_start_daemon_manual >/dev/null 2>&1; then
     # shellcheck source=/dev/null
-    source "$BRIDGE_ROOT/lib/daemon_service.sh"
+    source "$HOST_STATE_DIR/lib/daemon_service.sh"
   fi
 
-  START_SCRIPT="$BRIDGE_ROOT/start-daemon.sh"
+  mkdir -p "$HOST_STATE_DIR"
+  START_SCRIPT="$HOST_STATE_DIR/start-daemon.sh"
   {
     echo '#!/usr/bin/env bash'
     echo '# start-daemon.sh — start the bridge daemon (non-systemd Linux).'
     echo 'set -euo pipefail'
     echo "BRIDGE_ROOT=\"$BRIDGE_ROOT\""
     echo "export BRIDGE_ROOT"
+    echo "BRIDGE_SCRIPTS=\"$SCRIPTS_DIR\""
+    echo "export BRIDGE_SCRIPTS"
     echo "DAEMON_LOG=\"$DAEMON_LOG\""
     echo "DAEMON_ERR=\"$DAEMON_ERR\""
     echo "USER_SCRIPTS_DIR=\"$USER_SCRIPTS_DIR\""
@@ -2815,7 +2861,7 @@ else
       printf '  %q\n' "$arg"
     done
     echo ')'
-    echo 'source "$BRIDGE_ROOT/lib/daemon_service.sh"'
+    echo "source \"$HOST_STATE_DIR/lib/daemon_service.sh\""
     echo 'bridge_start_daemon_manual'
   } > "$START_SCRIPT"
   chmod +x "$START_SCRIPT"

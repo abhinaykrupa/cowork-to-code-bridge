@@ -43,6 +43,37 @@ echo
 
 BRIDGE_ROOT="${BRIDGE_ROOT:-$HOME/.cowork-to-code-bridge}"
 PLIST="$HOME/Library/LaunchAgents/dev.cowork-to-code-bridge.daemon.plist"
+UNIT="$HOME/.config/systemd/user/cowork-to-code-bridge.service"
+HOST_STATE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/cowork-to-code-bridge"
+SCRIPTS_MARKER=".cowork-to-code-bridge-scripts"
+
+# Hardened installs keep the allowlist outside BRIDGE_ROOT. Read where from the
+# service definition BEFORE it is deleted below.
+service_scripts_dir() {
+  local plist="$1" unit="$2" starter="$3"
+  if [[ -f "$plist" && -x /usr/libexec/PlistBuddy ]]; then
+    /usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:BRIDGE_SCRIPTS" "$plist" 2>/dev/null && return 0
+  fi
+  if [[ -f "$unit" ]]; then
+    sed -n 's/^Environment=BRIDGE_SCRIPTS=//p' "$unit" | head -1; return 0
+  fi
+  if [[ -f "$starter" ]]; then
+    sed -n 's/^BRIDGE_SCRIPTS="\(.*\)"$/\1/p' "$starter" | head -1
+  fi
+}
+
+# Remove a scripts directory ONLY if the installer created it (marker present)
+# and it is not inside BRIDGE_ROOT (which is removed separately). Never rm -rf a
+# path merely because a service definition named it.
+remove_marked_scripts_dir() {
+  local dir="$1" root="$2"
+  [[ -n "$dir" && -d "$dir" && ! -L "$dir" ]] || return 1
+  [[ -f "$dir/$SCRIPTS_MARKER" ]] || return 1
+  case "$dir" in "$root"|"$root"/*) return 1 ;; esac
+  rm -rf "$dir"
+}
+
+_HARDENED_SCRIPTS="$(service_scripts_dir "$PLIST" "$UNIT" "$HOST_STATE_DIR/start-daemon.sh")"
 
 ASSUME_YES=0
 KEEP_DATA=0
@@ -65,6 +96,9 @@ if [[ -f "$_REPO_ROOT/scripts/lib/daemon_service.sh" ]]; then
   BRIDGE_ROOT="${BRIDGE_ROOT:-$HOME/.cowork-to-code-bridge}"
   # shellcheck source=scripts/lib/daemon_service.sh
   source "$_REPO_ROOT/scripts/lib/daemon_service.sh"
+elif [[ -f "$HOST_STATE_DIR/lib/daemon_service.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "$HOST_STATE_DIR/lib/daemon_service.sh"
 elif [[ -f "$BRIDGE_ROOT/lib/daemon_service.sh" ]]; then
   # shellcheck source=/dev/null
   source "$BRIDGE_ROOT/lib/daemon_service.sh"
@@ -89,7 +123,6 @@ if [[ "$(uname -s)" == "Linux" ]]; then
     echo "→ stopping + disabling systemd --user service"
     systemctl --user disable --now cowork-to-code-bridge.service 2>/dev/null || true
   fi
-  UNIT="$HOME/.config/systemd/user/cowork-to-code-bridge.service"
   if [[ -f "$UNIT" ]]; then
     echo "→ removing $UNIT"
     rm -f "$UNIT"
@@ -117,6 +150,19 @@ elif [[ -d "$BRIDGE_ROOT" ]]; then
   else
     echo "  kept $BRIDGE_ROOT"
   fi
+fi
+
+# Hardened layout: the allowlist and the host-side starter live outside BRIDGE_ROOT.
+if [[ "$KEEP_DATA" -ne 1 ]]; then
+  for d in "$_HARDENED_SCRIPTS" "$HOME/.bridge-scripts"; do
+    if remove_marked_scripts_dir "$d" "$BRIDGE_ROOT"; then
+      echo "✓ removed hardened scripts dir $d"
+    fi
+  done
+fi
+if [[ -d "$HOST_STATE_DIR" ]]; then
+  rm -rf "$HOST_STATE_DIR"
+  echo "✓ removed $HOST_STATE_DIR"
 fi
 
 # Remove the global Cowork skill so it stops loading into sessions.

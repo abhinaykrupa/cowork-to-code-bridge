@@ -53,16 +53,38 @@ Stated honestly:
 | Can the sandbox add a script? | Yes, by writing a file | No |
 | What bounds a compromised sandbox | Nothing beyond your user account | The allowlist, `BRIDGE_PERMISSION_CEILING`, the caller-env filter, and link-safe I/O |
 
-To harden an existing install, move the scripts and point the daemon at them from
-its **service definition** — not from `.env`, which the sandbox can write (and
-which the daemon ignores for `BRIDGE_*` settings for that reason):
+**New install, hardened:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/abhinaykrupa/cowork-to-code-bridge/main/install.sh | BRIDGE_HARDENED=1 bash
+```
+
+Scripts go to `~/.bridge-scripts/` (override with `BRIDGE_SCRIPTS_DIR=...`), the
+service definition records it as `BRIDGE_SCRIPTS`, and on non-systemd Linux the
+`@reboot` starter and the library it sources move to
+`~/.local/share/cowork-to-code-bridge/` — both are executed by the host, so they
+must not sit in the sandbox-writable mount either. Re-running the installer with
+`BRIDGE_HARDENED=1` converts an existing install; it keeps your token and warns
+about any scripts left in the old `scripts/` folder, which the daemon then ignores.
+
+The uninstaller removes the hardened scripts directory **only if it carries the
+marker file the installer wrote**, so pointing `BRIDGE_SCRIPTS_DIR` at a
+directory of your own never gets it deleted.
+
+Verified in CI by `.github/workflows/install-e2e.yml`, which does a real
+hardened install on a clean runner, plants a script inside the mount, confirms
+it is refused, and checks the uninstaller leaves nothing behind.
+
+**Converting by hand** (equivalent): move the scripts out, then set `BRIDGE_SCRIPTS`
+in the **service definition** — not in `.env`, which the sandbox can write and
+which the daemon ignores for `BRIDGE_*` settings:
 
 ```bash
 mkdir -p ~/.bridge-scripts && chmod 700 ~/.bridge-scripts
 mv ~/.cowork-to-code-bridge/scripts/* ~/.bridge-scripts/
 ```
 
-macOS — add to the `EnvironmentVariables` dict in
+macOS — add to `EnvironmentVariables` in
 `~/Library/LaunchAgents/dev.cowork-to-code-bridge.daemon.plist`, then reload:
 
 ```xml
@@ -76,9 +98,6 @@ Linux — add to the `[Service]` section of the systemd user unit:
 Environment=BRIDGE_SCRIPTS=%h/.bridge-scripts
 Environment=BRIDGE_PERMISSION_CEILING=edit
 ```
-
-The layout is verified by `tests/test_env_injection.py::test_hardened_layout_ignores_scripts_planted_in_the_mount`.
-Installer support for choosing it at install time is not built yet.
 
 ## Known limits
 

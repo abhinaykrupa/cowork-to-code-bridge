@@ -1,0 +1,78 @@
+name: Install e2e
+
+# Runs the real install.sh and uninstaller on a clean Linux runner, in both
+# layouts. GitHub's Ubuntu runners have no systemd user bus, so this exercises
+# the manual (setsid + @reboot cron) path — the one whose starter script the
+# hardened layout moves out of the Cowork mount.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        layout: [default, hardened]
+    env:
+      BRIDGE_CLAUDE_AUTOINSTALL: "0"
+      BRIDGE_PYTHON_AUTOINSTALL: "0"
+      BRIDGE_HARDENED: ${{ matrix.layout == 'hardened' && '1' || '0' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: bash install.sh < /dev/null
+
+      - name: Layout is what was asked for
+        run: |
+          R="$HOME/.cowork-to-code-bridge"
+          if [ "$BRIDGE_HARDENED" = "1" ]; then
+            S="$HOME/.bridge-scripts"
+            test -f "$S/ping.sh" && test -f "$S/.cowork-to-code-bridge-scripts"
+            test ! -e "$R/scripts" || { echo "scripts/ created inside the mount"; exit 1; }
+            test -f "$HOME/.local/share/cowork-to-code-bridge/start-daemon.sh"
+            test -f "$HOME/.local/share/cowork-to-code-bridge/lib/daemon_service.sh"
+            test ! -e "$R/start-daemon.sh" && test ! -e "$R/lib"
+          else
+            test -f "$R/scripts/ping.sh" && test -f "$R/start-daemon.sh"
+          fi
+
+      - name: Round-trip through the live daemon
+        run: |
+          export PATH="$(python3 -c 'import sysconfig;print(sysconfig.get_path("scripts","posix_user"))'):$PATH"
+          cowork-to-code-bridge-selfcheck
+
+      - name: A script planted in the mount does not run (hardened only)
+        if: matrix.layout == 'hardened'
+        run: |
+          R="$HOME/.cowork-to-code-bridge"
+          mkdir -p "$R/scripts"
+          printf '#!/bin/sh\ntouch %s/PWNED\n' "$HOME" > "$R/scripts/evil.sh"
+          chmod +x "$R/scripts/evil.sh"
+          BRIDGE_ROOT="$R" python3 - <<'PY'
+          import os, sys
+          from cowork_to_code_bridge.client import call_remote
+          r = call_remote("scripts/evil.sh", [], timeout=20)
+          print(r)
+          assert r["exit_code"] == -1, r
+          assert not os.path.exists(os.path.expanduser("~/PWNED")), "planted script ran"
+          PY
+
+      - name: Uninstall leaves nothing behind
+        run: |
+          bash daemon/uninstall.sh --yes
+          test ! -e "$HOME/.cowork-to-code-bridge"
+          test ! -e "$HOME/.bridge-scripts"
+          test ! -e "$HOME/.local/share/cowork-to-code-bridge"
+          ! (crontab -l 2>/dev/null | grep -q start-daemon.sh)

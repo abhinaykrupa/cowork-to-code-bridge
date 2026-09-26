@@ -43,7 +43,7 @@ from cowork_to_code_bridge.client import (
     daemon_alive as _daemon_alive,
 )
 
-__version__ = "0.6.2"
+__version__ = "0.7.0"
 PROTOCOL_VERSION = "2024-11-05"
 
 # ---------------------------------------------------------------------------

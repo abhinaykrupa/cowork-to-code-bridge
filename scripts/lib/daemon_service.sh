@@ -32,6 +32,7 @@ bridge_start_daemon_manual() {
   bridge_stop_daemon_manual
   mkdir -p "$BRIDGE_ROOT"
   export BRIDGE_ROOT
+  [[ -n "${BRIDGE_SCRIPTS:-}" ]] && export BRIDGE_SCRIPTS
   export PATH="${USER_SCRIPTS_DIR:-}:$PATH:/usr/local/bin:/usr/bin:/bin"
 
   local log_out="${DAEMON_LOG:-$BRIDGE_ROOT/daemon.log}"
@@ -74,7 +75,9 @@ bridge_install_cron_reboot() {
 
 bridge_remove_cron_reboot() {
   command -v crontab >/dev/null 2>&1 || return 0
-  local starter="${BRIDGE_ROOT:-}/start-daemon.sh"
+  # Matches both layouts: ~/.cowork-to-code-bridge/start-daemon.sh (default) and
+  # ~/.local/share/cowork-to-code-bridge/start-daemon.sh (hardened).
+  local starter="cowork-to-code-bridge/start-daemon.sh"
   local existing
   existing="$(crontab -l 2>/dev/null || true)"
   [[ -n "$existing" ]] || return 0

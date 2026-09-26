@@ -6,6 +6,38 @@ All notable changes to this project. Format loosely follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-25
+
+### Added
+- **Hardened install: `BRIDGE_HARDENED=1`.** Puts the allowlisted scripts in
+  `~/.bridge-scripts/` (or `BRIDGE_SCRIPTS_DIR`), outside the folder Cowork
+  mounts read-write, and records it as `BRIDGE_SCRIPTS` in the launchd plist,
+  the systemd unit and the manual-start environment. In this layout a
+  compromised sandbox can no longer add its own "allowlisted" script. Default
+  layout unchanged.
+- **Install e2e in CI.** A real `install.sh` → selfcheck → uninstall on a clean
+  Linux runner, in both layouts; the hardened run plants a script inside the
+  mount and asserts it is refused and never executes. The project's main product
+  is an installer and nothing exercised it end to end before.
+
+### Security
+- **Host-executed files moved out of the mount (hardened layout).** On
+  non-systemd Linux, cron ran `BRIDGE_ROOT/start-daemon.sh` at every reboot and
+  that starter sourced `BRIDGE_ROOT/lib/daemon_service.sh` — two sandbox-writable
+  files executed by the host, a persistence path that would have survived the
+  hardened layout. Both now live in `~/.local/share/cowork-to-code-bridge/`.
+  The uninstaller also prefers that host-side library over the mounted copy.
+
+### Fixed
+- **Cron cleanup matched only the default starter path**, so a starter anywhere
+  else left its `@reboot` line behind. Now matches both layouts. The test for
+  this initially passed against the buggy code — `BRIDGE_ROOT` was unset in the
+  test, collapsing the old pattern to one that matched by accident — and was
+  corrected to reproduce real conditions before relying on it.
+- **Uninstall never deletes a directory it didn't create.** A hardened scripts
+  directory is removed only if it carries the installer's marker file, so a
+  `BRIDGE_SCRIPTS_DIR` pointing at a user's own folder is left alone.
+
 ## [0.6.2] - 2026-09-25
 
 Packaging release: makes a Homebrew tap possible and stops every release from

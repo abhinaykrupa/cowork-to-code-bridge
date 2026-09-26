@@ -28,6 +28,62 @@ PLIST_PATH = Path.home() / "Library" / "LaunchAgents" / f"{PLIST_LABEL}.plist"
 DEFAULT_BRIDGE_ROOT = Path.home() / ".cowork-to-code-bridge"
 SKILL_DIR = Path.home() / ".claude" / "skills" / "cowork-to-code-bridge"
 PACKAGE_NAME = "cowork-to-code-bridge"
+SYSTEMD_UNIT_PATH = Path.home() / ".config" / "systemd" / "user" / "cowork-to-code-bridge.service"
+# Hardened layout (BRIDGE_HARDENED=1 at install): the allowlist and the host-side
+# reboot starter live outside BRIDGE_ROOT, which Cowork mounts read-write.
+HOST_STATE_DIR = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") \
+    / "cowork-to-code-bridge"
+DEFAULT_HARDENED_SCRIPTS = Path.home() / ".bridge-scripts"
+SCRIPTS_MARKER = ".cowork-to-code-bridge-scripts"
+# Matches the @reboot starter in both layouts.
+STARTER_SUFFIX = "cowork-to-code-bridge/start-daemon.sh"
+
+
+def service_scripts_dir(plist: Path = PLIST_PATH, unit: Path = SYSTEMD_UNIT_PATH,
+                        starter: Path | None = None) -> Path | None:
+    """BRIDGE_SCRIPTS from the installed service definition, if it sets one.
+
+    Must be read BEFORE the service definition is deleted.
+    """
+    import plistlib
+    import re
+    try:
+        if plist.is_file():
+            with plist.open("rb") as fh:
+                env = plistlib.load(fh).get("EnvironmentVariables") or {}
+            if env.get("BRIDGE_SCRIPTS"):
+                return Path(env["BRIDGE_SCRIPTS"])
+        if unit.is_file():
+            for line in unit.read_text().splitlines():
+                if line.startswith("Environment=BRIDGE_SCRIPTS="):
+                    return Path(line.split("=", 2)[2].strip())
+        starter = starter or HOST_STATE_DIR / "start-daemon.sh"
+        if starter.is_file():
+            m = re.search(r'^BRIDGE_SCRIPTS="(.*)"$', starter.read_text(), re.M)
+            if m:
+                return Path(m.group(1))
+    except Exception:  # noqa: BLE001 — a malformed file must not abort uninstall
+        return None
+    return None
+
+
+def remove_marked_scripts_dir(directory: Path | None, bridge_root: Path) -> bool:
+    """Remove a scripts dir only if the installer created it (marker present).
+
+    Never rm -rf a path merely because a service definition named it: someone may
+    have pointed BRIDGE_SCRIPTS at a directory of their own.
+    """
+    if directory is None or directory.is_symlink() or not directory.is_dir():
+        return False
+    if not (directory / SCRIPTS_MARKER).is_file():
+        return False
+    try:
+        directory.resolve().relative_to(bridge_root.resolve())
+        return False  # inside BRIDGE_ROOT: removed with the root, if at all
+    except ValueError:
+        pass
+    shutil.rmtree(directory)
+    return True
 
 
 def _color(s: str, code: str) -> str:
@@ -119,8 +175,7 @@ def stop_manual_daemon(bridge_root: Path) -> bool:
             pass
         pidfile.unlink(missing_ok=True)
         did = True
-    starter = bridge_root / "start-daemon.sh"
-    starter_path = str(starter)
+    starters = [bridge_root / "start-daemon.sh", HOST_STATE_DIR / "start-daemon.sh"]
     import shutil as _sh
     if _sh.which("crontab"):
         try:
@@ -130,7 +185,7 @@ def stop_manual_daemon(bridge_root: Path) -> bool:
             if BRIDGE_CRON_MARKER in existing:
                 lines = [
                     ln for ln in existing.splitlines()
-                    if BRIDGE_CRON_MARKER not in ln and starter_path not in ln
+                    if BRIDGE_CRON_MARKER not in ln and STARTER_SUFFIX not in ln
                 ]
                 proc = subprocess.run(
                     ["crontab", "-"], input="\n".join(lines) + "\n",
@@ -140,9 +195,10 @@ def stop_manual_daemon(bridge_root: Path) -> bool:
                     did = True
         except OSError:
             pass
-    if starter.exists():
-        starter.unlink()
-        did = True
+    for starter in starters:
+        if starter.exists():
+            starter.unlink()
+            did = True
     return did
 
 
@@ -266,6 +322,9 @@ def main() -> int:
     print(f"  package     : {PACKAGE_NAME}")
     print(f"  interpreter : {sys.executable}")
 
+    # Read the hardened scripts location before the service definition goes.
+    hardened_scripts = service_scripts_dir()
+
     # ─── 1. Stop + remove the background service (launchd or systemd) ──────────
     if platform.system() == "Linux":
         step("Stopping background daemon (manual + systemd)")
@@ -297,6 +356,15 @@ def main() -> int:
             print(green(f"  ✓ removed {bridge_root}"))
         else:
             print(f"  ({bridge_root} not removed)")
+
+    # ─── 2.2 Hardened layout: allowlist + host-side starter outside the root ───
+    if not args.keep_data:
+        for d in dict.fromkeys(x for x in (hardened_scripts, DEFAULT_HARDENED_SCRIPTS) if x):
+            if remove_marked_scripts_dir(d, bridge_root):
+                print(green(f"  ✓ removed hardened scripts dir {d}"))
+    if HOST_STATE_DIR.is_dir() and not HOST_STATE_DIR.is_symlink():
+        shutil.rmtree(HOST_STATE_DIR)
+        print(green(f"  ✓ removed {HOST_STATE_DIR}"))
 
     # ─── 2.5 Remove the global Cowork skill ───────────────────────────────────
     step(f"Removing global Cowork skill at {SKILL_DIR}")
