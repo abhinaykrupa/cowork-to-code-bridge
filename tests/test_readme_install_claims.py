@@ -72,17 +72,20 @@ def test_no_link_to_the_pypi_project_page(readme: str):
     )
 
 
-def test_unpublished_artifacts_are_marked_conditional(readme: str):
-    """Homebrew is not published either — it must read as conditional, not available.
+def test_homebrew_instruction_includes_the_setup_step(readme: str):
+    """The tap is live, but `brew install` alone only installs files.
 
-    Negative control for the tests above: the guard is about *claiming* something
-    works, not about mentioning it. Mentioning a planned tap is fine; telling the
-    reader to run it as though it exists is not.
+    The formula deliberately does not register the launchd agent during
+    `brew install` (Homebrew 7 dropped script post_install, and doing it silently
+    was never right). A README that shows only `brew install` leaves the user
+    with nothing running and no idea why — so every brew instruction must be
+    followed by `cowork-to-code-bridge-setup`.
     """
-    if "brew install abhinaykrupa/tap" in readme:
-        idx = readme.index("brew install abhinaykrupa/tap")
-        context = readme[max(0, idx - 200):idx]
-        assert re.search(r"once\b|planned|not yet|when .*published", context, re.I), (
-            "README presents the Homebrew tap as available, but "
-            "github.com/abhinaykrupa/homebrew-tap does not exist"
-        )
+    idx = readme.find("brew install abhinaykrupa/tap/cowork-to-code-bridge")
+    assert idx != -1, "README lost its Homebrew install instruction"
+    assert "cowork-to-code-bridge-setup" in readme[idx:idx + 300], (
+        "README shows `brew install` without the `cowork-to-code-bridge-setup` step"
+    )
+    # The tap is published now; stale "once published" wording would mislead.
+    context = readme[max(0, idx - 300):idx]
+    assert "once the" not in context.lower() or "tap" not in context.lower()

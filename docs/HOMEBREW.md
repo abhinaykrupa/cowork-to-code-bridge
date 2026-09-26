@@ -1,132 +1,50 @@
 # Homebrew install (macOS)
 
-Homebrew distributes software through **formulas** — small Ruby files that describe
-how to download and install a package. Formulas for third-party projects live in a
-**tap**: a separate GitHub repo named `homebrew-<name>`. Homebrew maps
-`abhinaykrupa/homebrew-tap` to the tap name `abhinaykrupa/tap`.
-
-The bridge is more than a pip package: `install.sh` also creates
-`~/.cowork-to-code-bridge/`, whitelisted scripts, a launchd daemon, a bridge token,
-and the Cowork skill. The Homebrew formula downloads a pinned release tarball and
-runs that installer non-interactively.
-
-**Linux and WSL2:** keep using the [curl one-liner](../README.md#install--two-pastes-total).
-The formula is macOS-only (`launchd`).
-
----
-
-## Install (production tap)
-
-Once the maintainer publishes [abhinaykrupa/homebrew-tap](https://github.com/abhinaykrupa/homebrew-tap):
-
 ```bash
 brew install abhinaykrupa/tap/cowork-to-code-bridge
+cowork-to-code-bridge-setup
 ```
 
-No separate `brew tap` is required — Homebrew auto-taps on first install.
+No separate `brew tap` is needed — Homebrew taps
+[abhinaykrupa/homebrew-tap](https://github.com/abhinaykrupa/homebrew-tap) on first install.
 
----
+**Why two commands.** `brew install` only puts files in Homebrew's prefix: the
+pinned release tarball, plus a `cowork-to-code-bridge-setup` command.
+`cowork-to-code-bridge-setup` is the explicit second step. It runs the same
+`install.sh` as the curl one-liner — creates `~/.cowork-to-code-bridge/`, the
+allowlisted scripts, a bridge token, the Cowork skill and a launchd agent — and
+prints the connect line to paste into Cowork. Registering a background agent in
+your home directory is not something a formula should do silently during
+`brew install`, and Homebrew 7 no longer runs arbitrary scripts from
+`post_install` anyway.
 
-## Install (demo tap, before production tap exists)
+The Python package installed by setup comes from the **same tarball** the
+formula pinned, so the version always matches `brew info`.
 
-Contributor demo tap for issue #37:
+**Linux and WSL2:** use the [curl one-liner](../README.md#install--two-pastes-total).
+The formula is macOS-only (`launchd`).
+
+## Upgrading
 
 ```bash
-brew tap EagleEye-0101/tap
-brew install cowork-to-code-bridge
+brew upgrade cowork-to-code-bridge && cowork-to-code-bridge-setup
 ```
 
-Production target: `abhinaykrupa/tap`. The demo tap uses the same formula as
-[`packaging/homebrew/cowork-to-code-bridge.rb`](../packaging/homebrew/cowork-to-code-bridge.rb).
+Setup is idempotent: it keeps your token and scripts and restarts the daemon on
+the new version.
 
----
-
-## Maintainer: create the production tap (one-time)
-
-1. Create a public repo **`abhinaykrupa/homebrew-tap`** (exact name — Homebrew expects
-   the `homebrew-` prefix).
-2. Copy the canonical formula from this repo:
-
-   ```text
-   packaging/homebrew/cowork-to-code-bridge.rb  →  Formula/cowork-to-code-bridge.rb
-   ```
-
-3. Add a minimal `README.md` to the tap repo with:
-
-   ```bash
-   brew install abhinaykrupa/tap/cowork-to-code-bridge
-   ```
-
-4. Users can install immediately; no PyPI or manual `curl | bash` required on Mac.
-
----
-
-## Version bump checklist (manual)
-
-On each new GitHub release (e.g. `v0.5.1`):
-
-1. Download the release tarball and compute SHA256:
-
-   ```bash
-   curl -fsSL -o /tmp/cowork-to-code-bridge-0.5.1.tar.gz \
-     https://github.com/abhinaykrupa/cowork-to-code-bridge/archive/refs/tags/v0.5.1.tar.gz
-   shasum -a 256 /tmp/cowork-to-code-bridge-0.5.1.tar.gz
-   ```
-
-2. Update **`packaging/homebrew/cowork-to-code-bridge.rb`** in this repo:
-   - `url` → new tag tarball
-   - `sha256` → new hash
-
-3. Copy the updated formula to **`abhinaykrupa/homebrew-tap`** (`Formula/cowork-to-code-bridge.rb`).
-
-4. Run locally (macOS):
-
-   ```bash
-   tap_dir="$(brew --repository)/Library/Taps/local/homebrew-tap/Formula"
-   mkdir -p "$tap_dir"
-   cp packaging/homebrew/cowork-to-code-bridge.rb "$tap_dir/"
-   brew audit --strict local/tap/cowork-to-code-bridge
-   ```
-
----
-
-## Upgrade and reinstall
-
-`brew reinstall cowork-to-code-bridge` re-runs `post_install` / `install.sh`.
-The installer is idempotent: an existing `BRIDGE_TOKEN` in `~/.cowork-to-code-bridge/.env`
-is preserved.
-
----
-
-## Optional: auto-bump tap on release
-
-Not wired by default. When `abhinaykrupa/homebrew-tap` exists and a maintainer token
-(or cross-repo `GITHUB_TOKEN` policy) is configured, a workflow on
-`release: published` could:
-
-1. Download the new tag tarball and compute `sha256`.
-2. Patch `Formula/cowork-to-code-bridge.rb` in the tap repo.
-3. Open a PR (same pattern as [`.github/workflows/publish.yml`](../.github/workflows/publish.yml)
-   for PyPI).
-
-Until then, use the manual checklist above.
-
----
-
-## Uninstall
+## Uninstalling
 
 ```bash
 cowork-to-code-bridge-uninstall
-```
-
-Or:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/abhinaykrupa/cowork-to-code-bridge/main/daemon/uninstall.sh | bash
-```
-
-Then remove the formula if desired:
-
-```bash
 brew uninstall cowork-to-code-bridge
 ```
+
+## How the tap stays current
+
+The tap repo has a scheduled workflow that checks the latest release of this
+repo every six hours, hashes its release tarball, and updates the formula with
+the tap's own token — no cross-repo credentials involved.
+[`packaging/homebrew/cowork-to-code-bridge.rb`](../packaging/homebrew/cowork-to-code-bridge.rb)
+in this repo is the source the tap formula was created from, and the
+`homebrew-audit` CI job runs `brew audit --strict` against it on every change.
