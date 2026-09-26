@@ -188,3 +188,19 @@ def test_uninstall_py_marker_guard(un, tmp_path):
 def test_uninstall_py_host_state_dir_is_outside_default_root(un):
     assert un.HOST_STATE_DIR != un.DEFAULT_BRIDGE_ROOT
     assert un.DEFAULT_BRIDGE_ROOT not in un.HOST_STATE_DIR.parents
+
+
+def test_installer_exports_bridge_scripts_before_any_daemon_start():
+    """The first manual start happens inside install.sh itself.
+
+    The e2e job caught this: SCRIPTS_DIR was set but BRIDGE_SCRIPTS was not, so
+    on non-systemd Linux the freshly installed hardened daemon served the
+    DEFAULT scripts directory inside the mount until the next reboot.
+    """
+    lines = INSTALL.splitlines()
+    code = [(i, ln) for i, ln in enumerate(lines) if not ln.lstrip().startswith("#")]
+    export_at = next(i for i, ln in code if ln.strip() == 'export BRIDGE_SCRIPTS="$SCRIPTS_DIR"')
+    starts = [i for i, ln in code if any(s in ln for s in (
+        "launchctl bootstrap", "systemctl --user enable", "bridge_start_daemon_manual"))]
+    assert starts, "found no daemon start in install.sh — pattern is stale"
+    assert export_at < min(starts), "BRIDGE_SCRIPTS exported after the daemon is started"

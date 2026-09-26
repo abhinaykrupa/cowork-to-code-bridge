@@ -48,6 +48,10 @@ _LAYOUT="$(bridge_layout "$BRIDGE_ROOT" "${BRIDGE_HARDENED:-0}" "${BRIDGE_SCRIPT
 SCRIPTS_DIR="${_LAYOUT%%|*}"
 HOST_STATE_DIR="${_LAYOUT##*|}"   # files the host executes (reboot starter)
 SCRIPTS_MARKER=".cowork-to-code-bridge-scripts"
+# Export under the name the daemon reads, so EVERY start path — launchd, systemd,
+# and the manual start this script performs directly — serves the same dir. The
+# service definitions also carry it, but the first manual start happens here.
+export BRIDGE_SCRIPTS="$SCRIPTS_DIR"
 PLIST="$HOME/Library/LaunchAgents/dev.cowork-to-code-bridge.daemon.plist"
 PACKAGE="cowork-to-code-bridge"
 PACKAGE_SPEC="cowork-to-code-bridge>=0.7.0"

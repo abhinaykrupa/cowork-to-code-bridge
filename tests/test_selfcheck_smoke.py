@@ -6,6 +6,7 @@ end-to-end. Real (non-smoke) runs still exit 1 when checks fail.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 
@@ -54,3 +55,64 @@ def test_smoke_via_console_subprocess():
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Smoke OK" in result.stdout
+
+
+def test_warn_is_shown_but_not_counted_as_a_failure(monkeypatch, capsys):
+    """A missing claude CLI is advisory: the bridge works without it."""
+    monkeypatch.setattr(selfcheck, "CHECKS", [
+        ("advisory", lambda: (None, "optional thing missing")),
+        ("fine", lambda: (True, "ok")),
+    ])
+    assert selfcheck.run_checks() == 0
+    assert "WARN" in capsys.readouterr().out
+
+
+def test_fail_is_still_counted(monkeypatch):
+    """Negative control: WARN handling must not swallow real failures."""
+    monkeypatch.setattr(selfcheck, "CHECKS", [
+        ("advisory", lambda: (None, "x")), ("broken", lambda: (False, "y"))])
+    assert selfcheck.run_checks() == 1
+
+
+def test_missing_claude_cli_is_a_warning(monkeypatch, tmp_path):
+    monkeypatch.setattr(selfcheck.shutil, "which", lambda _n: None)
+    monkeypatch.setattr(selfcheck.Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(selfcheck.os.path, "exists", lambda _p: False)
+    real_exists = selfcheck.Path.exists
+    monkeypatch.setattr(selfcheck.Path, "exists",
+                        lambda self: False if self.name == "claude" else real_exists(self))
+    ok, detail = selfcheck.check_claude_cli()
+    assert ok is None and "run_claude.sh" in detail
+
+
+def test_linux_manual_daemon_is_recognised(monkeypatch, tmp_path):
+    """No systemd user bus -> the installer runs a setsid daemon; that's healthy."""
+    monkeypatch.setattr(selfcheck.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(selfcheck.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a[0], 1, stdout="inactive\n", stderr=""))
+    monkeypatch.setattr(selfcheck, "BRIDGE_ROOT", tmp_path)
+    (tmp_path / "daemon.pid").write_text(str(os.getpid()))
+    fake_proc = tmp_path / "proc_cmdline"
+    fake_proc.write_bytes(b"python3\x00-m\x00cowork_to_code_bridge.daemon\x00")
+    real_path = selfcheck.Path
+    monkeypatch.setattr(selfcheck, "Path", lambda p, *r: fake_proc
+                        if str(p).startswith("/proc/") else real_path(p, *r))
+    ok, detail = selfcheck.check_daemon_registered()
+    assert ok is True and "manual daemon" in detail
+
+
+def test_linux_stale_pidfile_pointing_at_another_process_is_not_healthy(monkeypatch, tmp_path):
+    """Negative control: the pidfile is sandbox-writable; a live but unrelated
+    pid must not count as a running bridge."""
+    monkeypatch.setattr(selfcheck.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(selfcheck.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a[0], 1, stdout="inactive\n", stderr=""))
+    monkeypatch.setattr(selfcheck, "BRIDGE_ROOT", tmp_path)
+    (tmp_path / "daemon.pid").write_text(str(os.getpid()))
+    fake_proc = tmp_path / "proc_cmdline"
+    fake_proc.write_bytes(b"/usr/bin/vim\x00notes.txt\x00")
+    real_path = selfcheck.Path
+    monkeypatch.setattr(selfcheck, "Path", lambda p, *r: fake_proc
+                        if str(p).startswith("/proc/") else real_path(p, *r))
+    ok, _ = selfcheck.check_daemon_registered()
+    assert ok is False
