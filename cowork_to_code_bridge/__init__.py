@@ -19,7 +19,7 @@ from .client import (
     resume_remote,
 )
 
-__version__ = "0.6.0"
+__version__ = "0.6.1"
 __all__ = [
     "call_remote",
     "call_remote_streaming",
