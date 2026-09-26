@@ -28,7 +28,7 @@ REPO="abhinaykrupa/cowork-to-code-bridge"
 BRIDGE_ROOT="$HOME/.cowork-to-code-bridge"
 PLIST="$HOME/Library/LaunchAgents/dev.cowork-to-code-bridge.daemon.plist"
 PACKAGE="cowork-to-code-bridge"
-PACKAGE_SPEC="cowork-to-code-bridge>=0.6.1"
+PACKAGE_SPEC="cowork-to-code-bridge>=0.6.2"
 DAEMON_LOG="$BRIDGE_ROOT/daemon.log"
 DAEMON_ERR="$BRIDGE_ROOT/daemon.err"
 
@@ -299,7 +299,25 @@ pip_install_user() {
   return $rc
 }
 
-if pip_install_user "$PACKAGE_SPEC" 2>/dev/null; then
+# Where to install the Python package from. When this installer is running from
+# a source tree — a Homebrew formula, a release tarball, a git clone — install
+# THAT tree, so the package matches the scripts being installed alongside it.
+# Previously a tagged install fell through to `@main` whenever PyPI was
+# unavailable, silently installing unreleased code under a release's name.
+package_source() {
+  local dir="${1:-}"
+  if [[ -n "$dir" && -f "$dir/pyproject.toml" && -f "$dir/cowork_to_code_bridge/__init__.py" ]]; then
+    echo "local:$dir"
+  else
+    echo "remote"
+  fi
+}
+
+_PKG_SRC="$(package_source "$_INSTALL_DIR")"
+if [[ "$_PKG_SRC" == local:* ]]; then
+  pip_install_user "${_PKG_SRC#local:}"
+  c_green "  ✓ installed from the bundled source (${_PKG_SRC#local:})"
+elif pip_install_user "$PACKAGE_SPEC" 2>/dev/null; then
   c_green "  ✓ installed from PyPI"
 else
   c_yellow "  PyPI install failed (package may not be published yet) — falling back to GitHub"
