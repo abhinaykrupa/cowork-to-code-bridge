@@ -216,7 +216,7 @@ def test_get_bridge_context_lists_every_installed_script():
     """
     install_sh = Path(__file__).resolve().parents[1] / "install.sh"
     installed = set(
-        re.findall(r'cat > "\$BRIDGE_ROOT/scripts/([a-z_]+\.sh)"', install_sh.read_text())
+        re.findall(r'cat > "\$SCRIPTS_DIR/([a-z_]+\.sh)"', install_sh.read_text())
     )
     assert installed, "no script heredocs found in install.sh — regex is stale"
 
@@ -234,9 +234,13 @@ def test_bridge_init_doc_mirrors_context_script_catalog():
     doc = (Path(__file__).resolve().parents[1] / "docs" / "BRIDGE_INIT.md").read_text()
     install_sh = Path(__file__).resolve().parents[1] / "install.sh"
     installed = set(
-        re.findall(r'cat > "\$BRIDGE_ROOT/scripts/([a-z_]+\.sh)"', install_sh.read_text())
+        re.findall(r'cat > "\$SCRIPTS_DIR/([a-z_]+\.sh)"', install_sh.read_text())
     )
 
+    # Without this, a stale regex makes `installed` empty and the check below
+    # passes over nothing — which is exactly what happened when install.sh moved
+    # from $BRIDGE_ROOT/scripts to $SCRIPTS_DIR.
+    assert installed, "no script heredocs found in install.sh — regex is stale"
     missing = sorted(s for s in installed if s not in doc)
     assert not missing, f"scripts installed but absent from BRIDGE_INIT.md: {missing}"
 

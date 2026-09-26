@@ -24,7 +24,7 @@ def _extract_script(script_name: str, marker: str) -> str:
     lines = INSTALL_SH.read_text().splitlines()
     start = None
     body: list[str] = []
-    prefix = f'cat > "$BRIDGE_ROOT/scripts/{script_name}" <<\'{marker}\''
+    prefix = f'cat > "$SCRIPTS_DIR/{script_name}" <<\'{marker}\''
 
     for index, line in enumerate(lines):
         if line == prefix:
@@ -1338,14 +1338,16 @@ INSTALL_SH_EXEMPT = {
 
 
 def _installed_script_names() -> set[str]:
-    """Script names install.sh actually writes into $BRIDGE_ROOT/scripts/."""
-    return set(
+    """Script names install.sh actually writes into $SCRIPTS_DIR."""
+    names = set(
         re.findall(
-            r'^cat > "\$BRIDGE_ROOT/scripts/([A-Za-z0-9_.-]+\.sh)" <<',
+            r'^cat > "\$SCRIPTS_DIR/([A-Za-z0-9_.-]+\.sh)" <<',
             INSTALL_SH.read_text(),
             re.MULTILINE,
         )
     )
+    assert names, "no script heredocs found in install.sh — regex is stale"
+    return names
 
 
 def test_install_sh_creates_every_catalog_script() -> None:
@@ -1407,8 +1409,8 @@ def test_installed_scripts_are_chmod_executable() -> None:
         for line in chmod_lines:
             if name in line:
                 return True
-            # A glob like "$BRIDGE_ROOT"/scripts/mac_*.sh covers mac_ram.sh etc.
-            for match in re.findall(r'scripts/([A-Za-z0-9_.-]*\*[A-Za-z0-9_.-]*)', line):
+            # A glob like "$SCRIPTS_DIR"/mac_*.sh covers mac_ram.sh etc.
+            for match in re.findall(r'/([A-Za-z0-9_.-]*\*[A-Za-z0-9_.-]*)', line):
                 if fnmatch.fnmatch(name, match):
                     return True
         return False
@@ -1448,14 +1450,16 @@ def test_newly_installed_scripts_match_canonical_copy(
 # kept falling behind: add a heredoc and it is guarded from that moment on.
 
 _HEREDOC_RE = re.compile(
-    r'^cat > "\$BRIDGE_ROOT/scripts/([A-Za-z0-9_.-]+\.sh)" <<\'([A-Za-z0-9_]+)\'$',
+    r'^cat > "\$SCRIPTS_DIR/([A-Za-z0-9_.-]+\.sh)" <<\'([A-Za-z0-9_]+)\'$',
     re.MULTILINE,
 )
 
 
 def _installed_script_heredocs() -> list[tuple[str, str]]:
     """Every (script_name, heredoc_marker) pair install.sh writes."""
-    return _HEREDOC_RE.findall(INSTALL_SH.read_text())
+    pairs = _HEREDOC_RE.findall(INSTALL_SH.read_text())
+    assert pairs, "no script heredocs found in install.sh — regex is stale"
+    return pairs
 
 
 def test_heredoc_discovery_finds_the_catalog() -> None:

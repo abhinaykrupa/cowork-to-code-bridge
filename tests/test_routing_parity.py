@@ -72,7 +72,7 @@ _DAEMON_EFFORT_SET = re.compile(r'effort_norm\s+in\s+\{([^}]*)\}')
 def _extract_run_claude_from_install_sh() -> str:
     """Return the run_claude.sh body embedded in install.sh's heredoc."""
     lines = INSTALL_SH.read_text().splitlines()
-    prefix = 'cat > "$BRIDGE_ROOT/scripts/run_claude.sh" <<\'RUNCLAUDE\''
+    prefix = 'cat > "$SCRIPTS_DIR/run_claude.sh" <<\'RUNCLAUDE\''
 
     try:
         start = lines.index(prefix) + 1

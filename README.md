@@ -50,6 +50,8 @@ Because Claude Code can run things on your Mac, a useful **side benefit** is tha
 curl -fsSL https://raw.githubusercontent.com/abhinaykrupa/cowork-to-code-bridge/main/install.sh | bash
 ```
 
+**Hardened layout (recommended if you care about the sandbox boundary):** add `BRIDGE_HARDENED=1` — `curl -fsSL …/install.sh | BRIDGE_HARDENED=1 bash`. It keeps the allowlisted scripts outside the folder Cowork mounts, so a compromised sandbox can't add its own. [Why this matters](https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/SECURITY.md#default-vs-hardened-layout).
+
 **macOS (Homebrew):**
 
 ```bash
