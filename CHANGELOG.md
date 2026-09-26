@@ -34,6 +34,14 @@ All notable changes to this project. Format loosely follows
   this initially passed against the buggy code — `BRIDGE_ROOT` was unset in the
   test, collapsing the old pattern to one that matched by accident — and was
   corrected to reproduce real conditions before relying on it.
+- **Found by the new e2e job on its first runs** (fixed before release):
+  on non-systemd Linux the freshly installed hardened daemon served the
+  *mounted* scripts directory until the next reboot, because `BRIDGE_SCRIPTS`
+  was not exported before the installer's own first start — a planted script
+  would have run; selfcheck reported FAIL for every install without a systemd
+  user bus, and FAIL without the `claude` CLI (now WARN — only 2 of 25 scripts
+  need it); and the first version of the manual-daemon check matched the module
+  name while the installer launches the console script.
 - **Uninstall never deletes a directory it didn't create.** A hardened scripts
   directory is removed only if it carries the installer's marker file, so a
   `BRIDGE_SCRIPTS_DIR` pointing at a user's own folder is left alone.
