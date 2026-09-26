@@ -80,6 +80,29 @@ Environment=BRIDGE_PERMISSION_CEILING=edit
 The layout is verified by `tests/test_env_injection.py::test_hardened_layout_ignores_scripts_planted_in_the_mount`.
 Installer support for choosing it at install time is not built yet.
 
+## Known limits
+
+Things the bridge does **not** currently guarantee, stated so nobody has to find
+them the hard way:
+
+- **A process that leaves its process group survives cancellation and timeout.**
+  The daemon starts each task in a new session and signals that whole group —
+  SIGTERM, then SIGKILL after `BRIDGE_CANCEL_GRACE_SEC`. A descendant that calls
+  `setsid()` (or double-forks into a new session) is no longer in the group and
+  keeps running. On Linux, cgroups v2 `cgroup.kill` would close this; macOS has
+  no equivalent, so it is documented rather than papered over.
+- **The shared folder must be a local bind mount, not a sync tool.** Atomicity
+  relies on `rename()` within one filesystem. Syncthing, Dropbox, iCloud Drive
+  and similar can surface a file before its contents have arrived, or deliver
+  the rename and the payload out of order.
+- **No kernel-level confinement of tasks.** Scripts run with your full user
+  permissions; nothing masks `~/.ssh` or `~/.aws` from them. Landlock and user
+  namespaces would be the Linux answer; macOS has neither (`sandbox-exec` is
+  deprecated). Output redaction is best-effort and is not a substitute.
+- **One daemon per bridge root.** In-flight claims are resolved at daemon
+  startup, which is only correct when a single daemon owns the queue. Running
+  two against the same root is unsupported.
+
 ## Reporting a vulnerability
 
 If you find a security issue, **please do not open a public issue.**

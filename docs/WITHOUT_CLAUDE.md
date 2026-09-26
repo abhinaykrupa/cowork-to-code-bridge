@@ -75,7 +75,7 @@ That is the entire client. Any language that can write JSON is a client.
 
 ## Adding your own scripts
 
-The allowlist *is* the security boundary. A request names a path relative to
+The allowlist is the security boundary **only if the sandbox can't write to it** — in the default layout `scripts/` is inside the shared folder, so it can. Put the scripts directory outside the mount (the [hardened layout](../SECURITY.md#default-vs-hardened-layout)) if you need that guarantee. A request names a path relative to
 `scripts/`; anything outside it is rejected before execution, and the resolved
 path is re-checked against the directory to block traversal.
 
