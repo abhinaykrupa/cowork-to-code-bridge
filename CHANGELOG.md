@@ -6,6 +6,35 @@ All notable changes to this project. Format loosely follows
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-09-25
+
+Packaging release: makes a Homebrew tap possible and stops every release from
+shipping with red workflow runs.
+
+### Fixed
+- **Tagged installs no longer silently install `main`.** When PyPI had nothing
+  (always, so far), `install.sh` fell back to `git+https://…@main` even when it
+  was running from a release tarball or a Homebrew formula, so a "v0.6.1"
+  install got whatever `main` held that day. It now installs the source tree it
+  ships in when it has one; `curl | bash` keeps the remote path. The selection
+  is a function tested against the real text of `install.sh`.
+- **Releases no longer fail two workflows.** `publish.yml` failed on every tag
+  (no PyPI Trusted Publisher configured) and `bump-formula.yml` waited for a PyPI
+  release that never existed, then needed a cross-repo token that was never
+  created. Six red runs across three releases.
+
+### Changed
+- **Release assets.** Each tagged release now carries the built wheel and sdist,
+  so `pip install <wheel URL>` works for a pinned version without PyPI. The PyPI
+  upload is a separate job gated on the `PYPI_PUBLISH` repository variable —
+  skipped, not failed, until it is set up.
+- **Homebrew formula no longer runs the installer during `brew install`.**
+  Homebrew 7 replaces script-running `post_install` with a declarative DSL, and
+  registering a launchd agent from inside `brew install` was never appropriate.
+  The formula installs the files plus a `cowork-to-code-bridge-setup` command,
+  and its `test` block checks the bundled package reports the formula's version.
+- `bump-formula.yml` removed; the tap tracks releases itself using its own token.
+
 ## [0.6.1] - 2026-09-25
 
 Security hardening of the sandbox → host boundary, from verifying two outside

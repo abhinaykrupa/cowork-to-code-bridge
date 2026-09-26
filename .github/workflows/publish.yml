@@ -1,9 +1,13 @@
-name: Publish to PyPI
+name: Build & publish
 
-# Publishes the package to PyPI when you push a version tag (e.g. v0.5.1),
-# or manually via the Actions tab. Uses PyPI Trusted Publishing (OIDC) — no
-# token to store IF you configure a trusted publisher on PyPI (recommended).
-# Otherwise, add a PYPI_API_TOKEN repo secret and uncomment the password line.
+# On a version tag: build the sdist + wheel, check them, and attach both to the
+# GitHub release — a versioned `pip install <wheel URL>` that needs no PyPI.
+#
+# The PyPI upload itself is OFF until the maintainer configures a Trusted
+# Publisher on pypi.org and sets the repository variable PYPI_PUBLISH=true
+# (Settings → Secrets and variables → Actions → Variables). Until then that job
+# is skipped rather than failed, so releases don't carry a red run for a step
+# that was never set up.
 
 on:
   push:
@@ -12,12 +16,12 @@ on:
 
 permissions:
   contents: read
-  id-token: write   # required for PyPI Trusted Publishing (OIDC)
 
 jobs:
-  build-and-publish:
+  build:
     runs-on: ubuntu-latest
-    environment: pypi
+    permissions:
+      contents: write   # attach dist files to the release
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -25,14 +29,38 @@ jobs:
           python-version: "3.12"
       - name: Build sdist + wheel
         run: |
-          python -m pip install --upgrade build
+          python -m pip install --upgrade build twine
           python -m build
-      - name: Check the dist
-        run: |
-          python -m pip install --upgrade twine
           twine check dist/*
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        # If NOT using Trusted Publishing, add this and set the secret:
-        # with:
-        #   password: ${{ secrets.PYPI_API_TOKEN }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Attach to the GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The release may be published a few minutes after the tag is pushed.
+          for i in $(seq 1 60); do
+            if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+              gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::notice::No GitHub release for $GITHUB_REF_NAME after 10 min; dist kept as a workflow artifact."
+
+  pypi:
+    needs: build
+    if: vars.PYPI_PUBLISH == 'true'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write   # PyPI Trusted Publishing (OIDC)
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
