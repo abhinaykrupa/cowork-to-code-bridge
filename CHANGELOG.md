@@ -6,6 +6,50 @@ All notable changes to this project. Format loosely follows
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-09-25
+
+Security hardening of the sandbox → host boundary, from verifying two outside
+reviews. Severity is stated precisely: in the **default** layout the sandbox can
+already write its own script into `scripts/`, so most of this is defence in
+depth there. It is **load-bearing** in the hardened layout (scripts outside the
+mount), which is now documented in SECURITY.md.
+
+### Security
+- **Link-safe I/O in the shared folder.** Every daemon read and write under
+  `BRIDGE_ROOT` now goes through `safefs`: anchored on a directory fd opened
+  `O_NOFOLLOW`, temp names unpredictable and `O_EXCL`, non-regular and
+  multiply-linked files refused. Previously a planted symlink could redirect a
+  daemon write to any host file — including on the token-mismatch path — and a
+  whole state directory could be swapped for a link. Reported as a TOCTOU concern
+  in openinterpreter/openinterpreter#1864. 9 attack tests, each asserting the
+  victim file's bytes, not a response payload.
+- **Caller environment filtered.** A task's `env` could replace any owner
+  variable outside a 7-name list and add anything — `BASH_ENV` or `PATH` alone
+  gave arbitrary code under the most restrictive ceiling while running only a
+  harmless allowlisted script (PoC in the tests). Caller vars may now only *add*
+  conventional upper-case names; code-loading, config, and network-routing names
+  are dropped and reported in a new `env_rejected` result field.
+  `BRIDGE_CALLER_ENV=0` (service definition only) disables caller env entirely.
+  The old code also contradicted its own comment, which said callers could only
+  set vars the daemon didn't already have.
+- **`.env` is untrusted input.** It is sandbox-writable, so it now gets the same
+  filter; only `BRIDGE_TOKEN` is taken from it unconditionally.
+- **SECURITY.md corrected.** It claimed the daemon "runs only scripts you've
+  approved". In the default layout the sandbox can add scripts, and it now says
+  so, with a default-vs-hardened table and setup steps.
+
+### Fixed
+- **Children inherit `/dev/null` as stdin.** Several headless agent CLIs block or
+  exit silently with an open stdin; foreground and manual runs inherited the
+  daemon's terminal. Raised in aaif-goose/goose#10788.
+- **A FIFO in `queue/`, `cancel/` or at `.env` hung the daemon** — `read_text()`
+  blocks on a FIFO with no writer. Reads are now non-blocking and non-regular
+  files are rejected.
+- **Scripts get the root the daemon actually serves** as `$BRIDGE_ROOT`, instead
+  of whatever the process env or `.env` said. Several `mcp_*.sh` scripts use it
+  bare.
+- **Task ids are validated** before becoming filenames in four directories.
+
 ## [0.6.0] - 2026-09-05
 
 Security, durability, and honesty-of-docs release. Two of these fix failures

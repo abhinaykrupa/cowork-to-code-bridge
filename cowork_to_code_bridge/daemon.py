@@ -53,6 +53,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from cowork_to_code_bridge import safefs
+
 # ─── Configuration ────────────────────────────────────────────────────────────
 BRIDGE_ROOT = Path(
     os.environ.get("BRIDGE_ROOT", Path.home() / ".cowork-to-code-bridge")
@@ -269,17 +271,89 @@ def redact_payload(value: Any) -> Any:
     return value
 
 
+
+# ─── Caller-supplied environment policy ───────────────────────────────────────
+#
+# A task may carry an `env` dict, and BRIDGE_ROOT/.env is merged into every
+# task's environment. Both are writable by the sandbox, so both are untrusted.
+# An environment variable is enough to turn an allowlisted script into
+# arbitrary code — BASH_ENV makes bash source a file first, PATH picks which
+# `git` runs, LD_PRELOAD/DYLD_INSERT_LIBRARIES inject a library, PYTHONSTARTUP,
+# NODE_OPTIONS, GIT_SSH_COMMAND, AWS_CONFIG_FILE (credential_process) and many
+# more execute commands — which would bypass both the script allowlist and
+# BRIDGE_PERMISSION_CEILING.
+#
+# Rules for an untrusted variable:
+#   * the name must be a conventional upper-case identifier;
+#   * it may only ADD a variable, never replace one the owner's process has;
+#   * it must not be, or start with, a name that changes what code runs, which
+#     config is loaded, or where network traffic goes.
+#
+# The denylist is best-effort by nature: a script that evals an arbitrary
+# variable is still the owner's responsibility. Owners who want no caller
+# influence at all set BRIDGE_CALLER_ENV=0 (read from the daemon's own process
+# environment — the launchd plist / systemd unit — which the sandbox cannot
+# reach).
+CALLER_ENV_ENABLED = os.environ.get("BRIDGE_CALLER_ENV", "1") != "0"
+_ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]{0,63}")
+_ENV_DENY_EXACT = frozenset({
+    "PATH", "HOME", "SHELL", "USER", "LOGNAME", "ENV", "BASH_ENV", "SHELLOPTS",
+    "BASHOPTS", "PS4", "PROMPT_COMMAND", "IFS", "CDPATH", "GLOBIGNORE", "ZDOTDIR",
+    "TMPDIR", "EDITOR", "VISUAL", "PAGER", "MANPAGER", "BROWSER", "HISTFILE",
+    "INPUTRC", "TERMINFO", "LOCPATH", "NLSPATH", "GCONV_PATH", "HOSTALIASES",
+    "RESOLV_HOST_CONF", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+    "FTP_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE", "CURL_HOME", "WGETRC", "KUBECONFIG", "CLASSPATH",
+    "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "GOFLAGS", "CC", "CXX", "CPP", "LD",
+    "AR", "CFLAGS", "CXXFLAGS", "LDFLAGS", "RUSTFLAGS", "RUSTC_WRAPPER",
+    "MAKEFLAGS", "MFLAGS", "SUDO_ASKPASS", "TZDIR",
+})
+_ENV_DENY_PREFIX = (
+    "LD_", "DYLD_", "BASH_FUNC_", "PYTHON", "NODE_", "NPM_CONFIG_", "YARN_",
+    "PERL", "RUBY", "GEM_", "BUNDLE_", "PIP_", "UV_", "CONDA", "VIRTUAL_ENV",
+    "PYENV", "NVM_", "CARGO_", "RUSTUP_", "GIT_", "SSH_", "GPG", "GNUPG",
+    "LESS", "OPENSSL_", "CLAUDE_", "ANTHROPIC_", "BRIDGE_", "AWS_", "GOOGLE_",
+    "GCLOUD_", "CLOUDSDK_", "AZURE_", "DOCKER_", "KUBE", "HOMEBREW_", "XDG_",
+    "_JAVA_", "JAVA_", "DOTNET_", "COMPLUS_",
+)
+
+
+def _env_rejection(name: str, owner_env: dict[str, str]) -> str | None:
+    """Why an untrusted variable may not be set, or None if it may."""
+    if not _ENV_NAME.fullmatch(name):
+        return "not an upper-case identifier"
+    if name in _ENV_DENY_EXACT or name.startswith(_ENV_DENY_PREFIX):
+        return "controls code loading, config, or network routing"
+    if name in owner_env:
+        return "would override the owner's value"
+    return None
+
+
 def load_env() -> dict[str, str]:
     """Merge process env with .env in BRIDGE_ROOT (process env wins)."""
     env = dict(os.environ)
-    env_file = BRIDGE_ROOT / ".env"
-    if env_file.exists():
-        for line in env_file.read_text().splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            k, _, v = line.partition("=")
-            env.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+    try:
+        # No links, no FIFO (would hang every task), bounded size.
+        text = safefs.read_regular(BRIDGE_ROOT, ".env", max_bytes=64 * 1024).decode(
+            "utf-8", "replace")
+    except FileNotFoundError:
+        return env
+    except OSError as e:
+        log(f"  ! .env ignored: {e}")
+        return env
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        k = k.strip()
+        if k == "BRIDGE_TOKEN":
+            # The one key .env exists to carry. Process env still wins.
+            env.setdefault(k, v.strip().strip('"').strip("'"))
+            continue
+        # .env is writable by the sandbox: same rules as a caller's `env`.
+        if _env_rejection(k, env) is None:
+            env[k] = v.strip().strip('"').strip("'")
     return env
 
 
@@ -300,10 +374,12 @@ def write_result(cmd_id: str, payload: dict) -> None:
     # a pattern, but the ordering means "everything written is scrubbed" holds
     # without exception carve-outs.
     payload = redact_payload(payload)
-    out = RESULTS / f"{cmd_id}.json"
-    tmp = out.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(payload))
-    tmp.rename(out)
+    try:
+        safefs.write_atomic(RESULTS, f"{cmd_id}.json", json.dumps(payload).encode("utf-8"))
+    except safefs.UnsafePath as e:
+        # results/ or the result name was replaced with a link. Refuse rather
+        # than write through it; the caller will time out, which is correct.
+        log(f"  ! SECURITY: refused to write result for {cmd_id}: {e}")
 
 
 # ─── Crash-resilience: journal + in-flight markers ────────────────────────────
@@ -332,7 +408,11 @@ def _journal_append(event: dict) -> None:
     event = {"ts": time.time(), **event}
     line = json.dumps(event) + "\n"
     # Open in append+binary, write, fsync.
-    fd = os.open(str(JOURNAL), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    try:
+        fd = safefs.open_append(BRIDGE_ROOT, JOURNAL.name)
+    except safefs.UnsafePath as e:
+        log(f"  ! SECURITY: journal not written, {e}")
+        return
     try:
         os.write(fd, line.encode("utf-8"))
         os.fsync(fd)
@@ -353,37 +433,45 @@ def _journal_replay() -> tuple[dict[str, str], dict[str, dict]]:
     # idem_key per id, harvested from received events, so we can attach the
     # cached result when we later see the corresponding completed event.
     idem_by_id: dict[str, str] = {}
-    if not JOURNAL.exists():
+    if not JOURNAL.exists() and not JOURNAL.is_symlink():
         return terminal, cache
     try:
-        with JOURNAL.open("r") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    ev = json.loads(line)
-                except json.JSONDecodeError:
-                    # Tolerate a partial last line from a power-loss crash.
-                    continue
-                evid = ev.get("id")
-                evtype = ev.get("event")
-                if not evid or not evtype:
-                    continue
-                if evtype == "received":
-                    k = ev.get("idempotency_key")
-                    if k:
-                        idem_by_id[evid] = k
-                elif evtype == "completed":
-                    terminal[evid] = "completed"
-                    result = ev.get("result") or {}
-                    k = idem_by_id.get(evid)
-                    if k and k not in cache:
-                        cache[k] = result
-                elif evtype == "crashed_inflight":
-                    terminal[evid] = "crashed_inflight"
-                elif evtype == "idempotency_hit":
-                    terminal[evid] = "idempotency_hit"
+        raw = safefs.read_regular(BRIDGE_ROOT, JOURNAL.name)
+    except safefs.UnsafePath as e:
+        # A link here would make replay parse an arbitrary host file.
+        log(f"  ! SECURITY: journal ignored, {e}")
+        return terminal, cache
+    except OSError as e:
+        log(f"!! journal replay error: {e}")
+        return terminal, cache
+    try:
+        for line in raw.decode("utf-8", "replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                # Tolerate a partial last line from a power-loss crash.
+                continue
+            evid = ev.get("id")
+            evtype = ev.get("event")
+            if not evid or not evtype:
+                continue
+            if evtype == "received":
+                k = ev.get("idempotency_key")
+                if k:
+                    idem_by_id[evid] = k
+            elif evtype == "completed":
+                terminal[evid] = "completed"
+                result = ev.get("result") or {}
+                k = idem_by_id.get(evid)
+                if k and k not in cache:
+                    cache[k] = result
+            elif evtype == "crashed_inflight":
+                terminal[evid] = "crashed_inflight"
+            elif evtype == "idempotency_hit":
+                terminal[evid] = "idempotency_hit"
     except Exception as e:
         log(f"!! journal replay error: {e}")
     return terminal, cache
@@ -398,20 +486,40 @@ def _inflight_write(cmd_id: str, cmd_snapshot: dict) -> None:
         "started_ts": time.time(),
         "cmd": cmd_snapshot,
     }
-    tmp = marker.with_suffix(".running.tmp")
-    data = json.dumps(payload).encode("utf-8")
-    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    try:
-        os.write(fd, data)
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    tmp.rename(marker)
+    safefs.write_atomic(INFLIGHT, marker.name, json.dumps(payload).encode("utf-8"),
+                        fsync=True)
 
 
 def _inflight_clear(cmd_id: str) -> None:
-    marker = INFLIGHT / f"{cmd_id}.running"
-    marker.unlink(missing_ok=True)
+    with contextlib.suppress(OSError):
+        safefs.unlink(INFLIGHT, f"{cmd_id}.running")
+
+
+# Task ids become filenames. Clients generate "<epoch>_<hex>"; allow a little
+# more for hand-written tasks, but nothing that could be a path, a hidden file
+# or a control character.
+_VALID_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+
+
+def _archive(path: Path) -> None:
+    """Move a consumed queue entry into processed/ without following links.
+
+    If processed/ has been swapped for a link the entry is dropped instead, so
+    the loop cannot re-read it forever.
+    """
+    try:
+        safefs.move(path.parent, PROCESSED, path.name)
+    except safefs.UnsafePath as e:
+        log(f"  ! SECURITY: {e}; discarding {path.name} instead of archiving")
+        _discard(path)
+    except FileNotFoundError:
+        pass
+
+
+def _discard(path: Path) -> None:
+    """Remove a bridge entry; removes a planted link itself, never its target."""
+    with contextlib.suppress(OSError):
+        safefs.unlink(path.parent, path.name)
 
 
 def _recover_inflight(terminal: dict[str, str]) -> None:
@@ -426,10 +534,10 @@ def _recover_inflight(terminal: dict[str, str]) -> None:
             # We finished but crashed before cleanup. Result file should already
             # exist; just clear the marker and move the queue file if it's still there.
             log(f"   recovery: {cmd_id} already completed, clearing stale marker")
-            marker.unlink(missing_ok=True)
+            _discard(marker)
             qfile = QUEUE / f"{cmd_id}.json"
             if qfile.exists():
-                qfile.rename(PROCESSED / qfile.name)
+                _archive(qfile)
             continue
         # Genuine crash: command was mid-execution. Fail it; do NOT re-run.
         log(f"   recovery: {cmd_id} crashed mid-execution; marking failed")
@@ -438,10 +546,10 @@ def _recover_inflight(terminal: dict[str, str]) -> None:
             "error": "daemon crashed mid-execution; command status indeterminate, not retried",
         })
         _journal_append({"id": cmd_id, "event": "crashed_inflight"})
-        marker.unlink(missing_ok=True)
+        _discard(marker)
         qfile = QUEUE / f"{cmd_id}.json"
         if qfile.exists():
-            qfile.rename(PROCESSED / qfile.name)
+            _archive(qfile)
 
 
 def _drain_stale_queue(terminal: dict[str, str]) -> None:
@@ -449,7 +557,7 @@ def _drain_stale_queue(terminal: dict[str, str]) -> None:
     for f in sorted(QUEUE.glob("*.json")):
         if terminal.get(f.stem):
             log(f"   recovery: {f.stem} already terminal in journal, archiving")
-            f.rename(PROCESSED / f.name)
+            _archive(f)
 
 
 def _task_max_age(cmd: dict) -> float:
@@ -573,10 +681,10 @@ def _read_cancel_request(cmd_id: str) -> str | None:
     presence is the signal; the reason is only for reporting).
     """
     req = CANCEL / f"{cmd_id}.json"
-    if not req.exists():
+    if not req.exists() and not req.is_symlink():
         return None
     try:
-        data = json.loads(req.read_text())
+        data = json.loads(safefs.read_regular(CANCEL, req.name, max_bytes=64 * 1024))
         reason = data.get("reason")
         return str(reason) if reason else "cancelled by request"
     except (OSError, ValueError):
@@ -586,7 +694,7 @@ def _read_cancel_request(cmd_id: str) -> str | None:
 def _clear_cancel_request(cmd_id: str) -> None:
     """Drop a consumed cancel request so a recycled id can't inherit it."""
     with contextlib.suppress(OSError):
-        (CANCEL / f"{cmd_id}.json").unlink(missing_ok=True)
+        safefs.unlink(CANCEL, f"{cmd_id}.json")
 
 
 def _terminate_tree(proc: subprocess.Popen) -> None:
@@ -650,9 +758,29 @@ def _run_streaming(argv: list[str], cwd: str, env: dict[str, str],
     progress_bytes = [0]
     progress_capped = [False]
 
-    # Truncate/create the progress file at start.
-    with contextlib.suppress(OSError):
-        progress_file.write_text("")
+    # One verified fd for the whole run. Reopening by path on every line would
+    # re-resolve a name the sandbox can swap for a link between two writes.
+    progress_lock = threading.Lock()
+    progress_fd: list[int | None] = [None]
+    try:
+        progress_fd[0] = safefs.open_append(progress_file.parent, progress_file.name,
+                                            truncate=True)
+    except OSError as e:
+        log(f"  ! progress log disabled for this task: {e}")
+
+    def _progress_write(text: str) -> None:
+        with progress_lock:
+            if progress_fd[0] is None:
+                return
+            with contextlib.suppress(OSError):
+                os.write(progress_fd[0], text.encode("utf-8", "replace"))
+
+    def _progress_close() -> None:
+        with progress_lock:
+            if progress_fd[0] is not None:
+                with contextlib.suppress(OSError):
+                    os.close(progress_fd[0])
+                progress_fd[0] = None
 
     status_file = progress_file.parent / (progress_file.stem + ".status.json")
     start_time = time.monotonic()
@@ -667,9 +795,8 @@ def _run_streaming(argv: list[str], cwd: str, env: dict[str, str],
             }
             if exit_code is not None:
                 payload["exit_code"] = exit_code
-            tmp = status_file.parent / (status_file.name + ".tmp")
-            tmp.write_text(json.dumps(payload))
-            tmp.rename(status_file)
+            safefs.write_atomic(status_file.parent, status_file.name,
+                                json.dumps(payload).encode("utf-8"))
         except Exception:  # noqa: BLE001
             pass
 
@@ -698,22 +825,20 @@ def _run_streaming(argv: list[str], cwd: str, env: dict[str, str],
                 if progress_bytes[0] >= MAX_PROGRESS_BYTES:
                     if not progress_capped[0]:
                         progress_capped[0] = True
-                        with contextlib.suppress(OSError), progress_file.open("a") as pf:
-                            pf.write(f"\n[bridge] progress log capped at "
-                                     f"{MAX_PROGRESS_BYTES} bytes; "
-                                     f"further output omitted from this live view.\n")
+                        _progress_write(f"\n[bridge] progress log capped at "
+                                        f"{MAX_PROGRESS_BYTES} bytes; "
+                                        f"further output omitted from this live view.\n")
                     continue
                 text = line if tag == "out" else f"[stderr] {line}"
                 progress_bytes[0] += len(text.encode("utf-8", "replace"))
-                with contextlib.suppress(OSError), progress_file.open("a") as pf:
-                    pf.write(text)
+                _progress_write(text)
         finally:
             with contextlib.suppress(Exception):
                 stream.close()
 
     try:
         proc = subprocess.Popen(
-            argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, cwd=cwd, env=env, bufsize=1,
             # Own process group: cancellation signals the whole tree. A script
             # that spawned `claude` would otherwise survive as an orphan holding
@@ -721,6 +846,7 @@ def _run_streaming(argv: list[str], cwd: str, env: dict[str, str],
             start_new_session=True,
         )
     except Exception as e:
+        _progress_close()
         return {"exit_code": -3, "error": str(e)}
 
     t_out = threading.Thread(target=_tee, args=(proc.stdout, out_buf, "out"), daemon=True)
@@ -744,6 +870,7 @@ def _run_streaming(argv: list[str], cwd: str, env: dict[str, str],
         """Shared teardown: reap tees, stop the status writer, write final status."""
         t_out.join(timeout=2)
         t_err.join(timeout=2)
+        _progress_close()
         # Stop status writer before writing the final status so "running" can
         # never overwrite the terminal state.
         _status_stop.set()
@@ -787,22 +914,37 @@ def _run_streaming(argv: list[str], cwd: str, env: dict[str, str],
 def run_one(cmd_path: Path, token_required: str | None,
             terminal: dict[str, str], idem_cache: dict[str, dict]) -> None:
     cmd_id = cmd_path.stem
-    # Size guard: refuse to slurp an oversized command file into memory.
+    # The id becomes a filename in results/, progress/ and inflight/. Anything
+    # outside a plain charset is refused before it can name a file anywhere.
+    if not _VALID_ID.fullmatch(cmd_id):
+        log(f"  ✗ refusing queue entry with invalid id: {cmd_path.name!r}")
+        _discard(cmd_path)
+        return
+    # Read without following links, without blocking on a FIFO, and without
+    # slurping an oversized file into memory.
     try:
-        if cmd_path.stat().st_size > MAX_CMD_BYTES:
-            write_result(cmd_id, {"exit_code": -1,
-                                  "error": f"command file too large (> {MAX_CMD_BYTES} bytes)"})
-            log(f"  ✗ {cmd_id}: oversized command file, rejected")
-            cmd_path.rename(PROCESSED / cmd_path.name)
-            return
+        raw = safefs.read_regular(QUEUE, cmd_path.name, max_bytes=MAX_CMD_BYTES)
+    except safefs.TooLarge:
+        write_result(cmd_id, {"exit_code": -1,
+                              "error": f"command file too large (> {MAX_CMD_BYTES} bytes)"})
+        log(f"  ✗ {cmd_id}: oversized command file, rejected")
+        _archive(cmd_path)
+        return
+    except safefs.UnsafePath as e:
+        write_result(cmd_id, {"exit_code": -1,
+                              "error": "command file must be a regular file, not a link or "
+                                       "special file"})
+        log(f"  ✗ SECURITY: {e}")
+        _discard(cmd_path)
+        return
     except OSError:
-        cmd_path.unlink(missing_ok=True)
+        _discard(cmd_path)
         return
     try:
-        cmd = json.loads(cmd_path.read_text())
+        cmd = json.loads(raw)
     except Exception as e:
         log(f"  ! bad json in {cmd_path.name}: {e}")
-        cmd_path.unlink(missing_ok=True)
+        _discard(cmd_path)
         return
 
     # ─── auth (constant-time compare to avoid token timing leaks) ──────────────
@@ -811,7 +953,7 @@ def run_one(cmd_path: Path, token_required: str | None,
         if not isinstance(supplied, str) or not hmac.compare_digest(supplied, token_required):
             write_result(cmd_id, {"exit_code": -1, "error": "bridge token mismatch"})
             log(f"  ✗ {cmd_id}: token mismatch")
-            cmd_path.rename(PROCESSED / cmd_path.name)
+            _archive(cmd_path)
             return
 
     # ─── journal: received ────────────────────────────────────────────────────
@@ -844,7 +986,7 @@ def run_one(cmd_path: Path, token_required: str | None,
                          "age_sec": round(age, 3), "max_age_sec": max_age})
         terminal[cmd_id] = "expired"
         log(f"  ⏲ {cmd_id}: expired ({age:.0f}s old > {max_age:.0f}s), not executed")
-        cmd_path.rename(PROCESSED / cmd_path.name)
+        _archive(cmd_path)
         return
 
     # ─── idempotency short-circuit ────────────────────────────────────────────
@@ -855,7 +997,7 @@ def run_one(cmd_path: Path, token_required: str | None,
         _journal_append({"id": cmd_id, "event": "idempotency_hit", "key": idem_key})
         terminal[cmd_id] = "idempotency_hit"
         log(f"  ↺ {cmd_id}: idempotency hit on key={idem_key!r}; returning cached result")
-        cmd_path.rename(PROCESSED / cmd_path.name)
+        _archive(cmd_path)
         return
 
     # ─── plan approval gate ───────────────────────────────────────────────────
@@ -883,12 +1025,12 @@ def run_one(cmd_path: Path, token_required: str | None,
                 "error": "approve_plan.sh timed out after 30s",
             })
             log(f"  ✗ {cmd_id}: approve_plan.sh timed out")
-            cmd_path.rename(PROCESSED / cmd_path.name)
+            _archive(cmd_path)
             return
         except Exception as e:
             write_result(cmd_id, {"exit_code": -1, "error": f"approve_plan.sh error: {e}"})
             log(f"  ✗ {cmd_id}: approve_plan.sh failed to run: {e}")
-            cmd_path.rename(PROCESSED / cmd_path.name)
+            _archive(cmd_path)
             return
 
         if hook_result.returncode != 0:
@@ -901,7 +1043,7 @@ def run_one(cmd_path: Path, token_required: str | None,
             })
             _rc = hook_result.returncode
             log(f"  ✗ {cmd_id}: plan rejected by hook (exit {_rc}): {rejection[:120]}")
-            cmd_path.rename(PROCESSED / cmd_path.name)
+            _archive(cmd_path)
             return
         log(f"  ✓ {cmd_id}: plan approved by hook")
 
@@ -910,7 +1052,7 @@ def run_one(cmd_path: Path, token_required: str | None,
     if not SAFE_NAME.fullmatch(script):
         write_result(cmd_id, {"exit_code": -1, "error": f"script path not allowed: {script!r}"})
         log(f"  ✗ {cmd_id}: bad script path {script!r}")
-        cmd_path.rename(PROCESSED / cmd_path.name)
+        _archive(cmd_path)
         return
 
     # SAFE_NAME guarantees "scripts/..." — strip and join under SCRIPTS_DIR.
@@ -923,20 +1065,20 @@ def run_one(cmd_path: Path, token_required: str | None,
     except ValueError:
         write_result(cmd_id, {"exit_code": -1, "error": f"script escapes scripts dir: {script!r}"})
         log(f"  ✗ {cmd_id}: path escape {script!r}")
-        cmd_path.rename(PROCESSED / cmd_path.name)
+        _archive(cmd_path)
         return
 
     if not script_full.exists():
         write_result(cmd_id, {"exit_code": -1, "error": f"script does not exist: {script}"})
         log(f"  ✗ {cmd_id}: script not found {script}")
-        cmd_path.rename(PROCESSED / cmd_path.name)
+        _archive(cmd_path)
         return
 
     # ─── validate args ────────────────────────────────────────────────────────
     args = cmd.get("args", [])
     if not isinstance(args, list) or not all(isinstance(a, (str, int, float)) for a in args):
         write_result(cmd_id, {"exit_code": -1, "error": "args must be a list of strings/numbers"})
-        cmd_path.rename(PROCESSED / cmd_path.name)
+        _archive(cmd_path)
         return
 
     # ─── build cmdline ────────────────────────────────────────────────────────
@@ -955,16 +1097,18 @@ def run_one(cmd_path: Path, token_required: str | None,
     # This prevents a caller with the bridge token from overriding security-critical
     # vars like CLAUDE_FLAGS that the owner set in launchd/systemd to restrict
     # what Claude Code can do. Caller can only SET vars not already in daemon env.
+    env_rejected: list[str] = []
+    if not isinstance(extra_env, dict):
+        extra_env = {}
     for k, v in extra_env.items():
         k = str(k)
-        if k not in env:          # owner var wins; caller can only add new ones
+        reason = "caller env disabled by owner" if not CALLER_ENV_ENABLED \
+            else _env_rejection(k, env)
+        if reason is None:
             env[k] = str(v)
-        elif k.upper() in ("CLAUDE_FLAGS", "BRIDGE_TOKEN", "BRIDGE_ROOT",
-                           "BRIDGE_ALLOW_UNAUTH", "BRIDGE_MAX_TIMEOUT",
-                           "BRIDGE_MAX_BUDGET_USD", "BRIDGE_CMD_ID"):
-            log(f"  ! blocked caller attempt to override protected env var: {k}")
         else:
-            env[k] = str(v)       # non-security vars: caller wins (e.g. PYTHONPATH)
+            env_rejected.append(k)
+            log(f"  ! dropped caller env var {k!r}: {reason}")
 
     # ── Task correlation id injection (issue #72) ─────────────────────────────
     # Inject BRIDGE_CMD_ID so a script that calls request_cowork.sh mid-task can
@@ -974,6 +1118,10 @@ def run_one(cmd_path: Path, token_required: str | None,
     # running task. Set AFTER the caller-env merge (and listed in the protected
     # vars above) so a caller with the bridge token can't spoof another task's id.
     env["BRIDGE_CMD_ID"] = cmd_id
+    # Scripts must see the root this daemon actually serves — not whatever the
+    # process env or the sandbox-writable .env happen to say. Several bundled
+    # scripts (mcp_*.sh) use a bare $BRIDGE_ROOT.
+    env["BRIDGE_ROOT"] = str(BRIDGE_ROOT)
 
     # ── Budget cap injection ──────────────────────────────────────────────────
     # Inject MAX_BUDGET_USD from the command payload into the script environment
@@ -1099,7 +1247,7 @@ def run_one(cmd_path: Path, token_required: str | None,
         terminal[cmd_id] = "completed"
         _clear_cancel_request(cmd_id)
         log(f"  ⨯ {cmd_id}: cancelled before execution ({_queued_cancel})")
-        cmd_path.rename(PROCESSED / cmd_path.name)
+        _archive(cmd_path)
         return
 
     # ─── in-flight marker + journal: started ──────────────────────────────────
@@ -1129,6 +1277,10 @@ def run_one(cmd_path: Path, token_required: str | None,
     # Order matters: result file first (durable), then journal completed (so
     # recovery sees terminal status), then clear in-flight marker, then move
     # queue file. Each step is recoverable from the next startup.
+    if env_rejected:
+        # Tell the caller what was dropped; silently ignoring it makes a
+        # legitimate-but-denied variable look like a script bug.
+        result["env_rejected"] = env_rejected
     write_result(cmd_id, result)
     _journal_append({"id": cmd_id, "event": "completed", "result": result})
     terminal[cmd_id] = "completed"
@@ -1136,9 +1288,9 @@ def run_one(cmd_path: Path, token_required: str | None,
         idem_cache.setdefault(idem_key, result)
     _inflight_clear(cmd_id)
     # The result file is now authoritative; drop the live progress + status files.
-    (PROGRESS / f"{cmd_id}.log").unlink(missing_ok=True)
-    (PROGRESS / f"{cmd_id}.status.json").unlink(missing_ok=True)
-    cmd_path.rename(PROCESSED / cmd_path.name)
+    _discard(PROGRESS / f"{cmd_id}.log")
+    _discard(PROGRESS / f"{cmd_id}.status.json")
+    _archive(cmd_path)
     log(f"  ✓ {cmd_id}: exit={result['exit_code']}")
 
 
