@@ -2,7 +2,7 @@ class CoworkToCodeBridge < Formula
   desc "Connect Claude Cowork to Claude Code on your Mac via a safe file-based bridge"
   homepage "https://github.com/abhinaykrupa/cowork-to-code-bridge"
   url "https://github.com/abhinaykrupa/cowork-to-code-bridge/archive/refs/tags/v0.6.2.tar.gz"
-  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  sha256 "728ae1668af2c5ca0246a4f075eebe9d46514ffc4860d47550bfe4dee4cb8861"
   license "MIT"
 
   depends_on :macos
