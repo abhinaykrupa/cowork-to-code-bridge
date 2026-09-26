@@ -168,7 +168,11 @@ def _manual_daemon_pid() -> int | None:
     cmdline = Path(f"/proc/{pid}/cmdline")
     if cmdline.exists():
         try:
-            if b"cowork_to_code_bridge.daemon" not in cmdline.read_bytes():
+            cmd = cmdline.read_bytes()
+            # The installer prefers the console script (`cowork-to-code-bridge-daemon`)
+            # and falls back to `python -m cowork_to_code_bridge.daemon`.
+            if not any(s in cmd for s in (b"cowork-to-code-bridge-daemon",
+                                          b"cowork_to_code_bridge.daemon")):
                 return None
         except OSError:
             return None

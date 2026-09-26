@@ -85,7 +85,14 @@ def test_missing_claude_cli_is_a_warning(monkeypatch, tmp_path):
     assert ok is None and "run_claude.sh" in detail
 
 
-def test_linux_manual_daemon_is_recognised(monkeypatch, tmp_path):
+@pytest.mark.parametrize("cmdline", [
+    # What install.sh actually launches first: the console script. The first
+    # version of this test only covered the module form and passed while the
+    # real e2e failed.
+    b"/usr/bin/python3\x00/home/u/.local/bin/cowork-to-code-bridge-daemon\x00",
+    b"python3\x00-m\x00cowork_to_code_bridge.daemon\x00",
+])
+def test_linux_manual_daemon_is_recognised(monkeypatch, tmp_path, cmdline):
     """No systemd user bus -> the installer runs a setsid daemon; that's healthy."""
     monkeypatch.setattr(selfcheck.platform, "system", lambda: "Linux")
     monkeypatch.setattr(selfcheck.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
@@ -93,7 +100,7 @@ def test_linux_manual_daemon_is_recognised(monkeypatch, tmp_path):
     monkeypatch.setattr(selfcheck, "BRIDGE_ROOT", tmp_path)
     (tmp_path / "daemon.pid").write_text(str(os.getpid()))
     fake_proc = tmp_path / "proc_cmdline"
-    fake_proc.write_bytes(b"python3\x00-m\x00cowork_to_code_bridge.daemon\x00")
+    fake_proc.write_bytes(cmdline)
     real_path = selfcheck.Path
     monkeypatch.setattr(selfcheck, "Path", lambda p, *r: fake_proc
                         if str(p).startswith("/proc/") else real_path(p, *r))
