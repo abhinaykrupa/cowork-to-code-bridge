@@ -218,6 +218,13 @@ When both are set the stricter one wins — a Cowork task can never ask for more
 
 **Optional: plan approval gate.** If you want a programmatic last line of defense before any task runs, copy [`examples/allowed_scripts/approve_plan.sh`](https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/examples/allowed_scripts/approve_plan.sh) to `~/.cowork-to-code-bridge/scripts/approve_plan.sh` and make it executable. When Cowork submits a task with a `plan` field, the bridge runs your hook first — exit 0 to proceed, exit 2 to reject (the hook's message is returned to Cowork). The hook can block schema migrations, send you a phone notification, or require an interactive keystroke. If the file doesn't exist, the plan field is silently ignored and nothing changes.
 
+**Optional: Linux sandboxing backend.** On Linux, you can isolate task execution and protect host secrets (`~/.ssh`, `~/.aws`, `.env`) by setting `BRIDGE_SANDBOX` in your systemd service environment (`Environment=BRIDGE_SANDBOX=auto`). Supported backends:
+- `off` (default): Standard unconfined execution.
+- `auto`: Probes for [Vetto](https://github.com/shleder/vetto) on `PATH`, falls back to Bubblewrap (`bwrap`), or unconfined.
+- `vetto`: Hardens execution via Landlock LSM ABI 1–6 and cgroups v2 `cgroup.kill` process extinction, ensuring child processes calling `setsid()` cannot escape timeout termination. For Claude tasks, uses `--profile claude` to pass through `CLAUDE_*` variables and `ANTHROPIC_API_KEY` while masking host credentials.
+- `bwrap`: Isolates tasks in unprivileged user/mount/pid namespaces.
+See [SECURITY.md](SECURITY.md#linux-sandboxing-opt-in) for details.
+
 **Requirement for the Claude Code path:** `run_claude.sh` needs the Claude Code **CLI** (`claude`) installed on your Mac. **The Claude Desktop app alone is not enough** — it bundles its own copy but doesn't expose a `claude` command. If the CLI is missing, `run_claude.sh` tries to install it on the fly (`brew install claude-code`, or the official installer) and then proceeds; if that fails it returns the exact one-line install command. To turn off auto-install (and just get the install instructions instead), set `BRIDGE_CLAUDE_AUTOINSTALL=0`. The system-info scripts (`mac_health.sh`, etc.) don't need the CLI at all.
 
 You can [uninstall it completely with one command](#uninstall) at any time.
