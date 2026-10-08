@@ -71,8 +71,8 @@ The uninstaller removes the hardened scripts directory **only if it carries the
 marker file the installer wrote**, so pointing `BRIDGE_SCRIPTS_DIR` at a
 directory of your own never gets it deleted.
 
-Verified in CI by `.github/workflows/install-e2e.yml`, which does a real
-hardened install on a clean runner, plants a script inside the mount, confirms
+Verified locally by `make e2e` (`scripts/e2e-install.sh`, run in a clean Docker
+container), which does a real hardened install, plants a script inside the mount, confirms
 it is refused, and checks the uninstaller leaves nothing behind.
 
 **Converting by hand** (equivalent): move the scripts out, then set `BRIDGE_SCRIPTS`

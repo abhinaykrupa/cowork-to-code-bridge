@@ -37,29 +37,30 @@ shot list lives in [`docs/demo-recording-script.md`](docs/demo-recording-script.
 ```bash
 git clone https://github.com/abhinaykrupa/cowork-to-code-bridge
 cd cowork-to-code-bridge
-python3 -m pip install -e ".[dev]"   # pytest + ruff
+make venv && make hooks               # .venv with pytest + ruff, pre-push hook
 ```
 
 ## Running checks
 
-```bash
-pytest -q          # full test suite (unit + e2e + sync guards)
-ruff check .       # lint
-bash -n install.sh # shell syntax check
-bash -n scripts/lib/platform.sh scripts/lib/daemon_service.sh
-```
-
-If you prefer shortcuts, the repository `Makefile` mirrors the core local workflow:
+Checks run **locally** — GitHub Actions only builds and publishes releases
+(`publish.yml`). The `Makefile` is the entry point:
 
 ```bash
-make install
-make test
-make lint
-make uninstall
+make venv          # one-time: create .venv (Python >= 3.10) + dev extras
+make check         # ruff + shell syntax + shell tests + pytest + selfcheck --smoke
+make e2e           # real install.sh/uninstaller in clean Docker containers (skips if Docker is down)
+make brew-audit    # brew audit --strict on the formula (skips if brew is missing)
+make check-matrix  # pytest on every installed Python 3.10/3.11/3.12
+make hooks         # once per clone: enable .githooks/pre-push (runs `make check`)
 ```
 
-All of these run in CI on every PR (see `.github/workflows/ci.yml`). PRs should
-keep the suite green.
+The Makefile uses `.venv/bin/python` when it exists. Individual pieces:
+`make test`, `make lint`, `make shell-check`, `make shell-tests`, `make selfcheck`.
+
+With the hook enabled, every `git push` runs `make check` first. In a hurry:
+`git push --no-verify` skips it. PRs should keep `make check` green; run
+`make e2e` when touching `install.sh`, the uninstaller, or the hardened layout,
+and `make brew-audit` when touching `packaging/homebrew/`.
 
 ## Two copies of the client — keep them in sync
 

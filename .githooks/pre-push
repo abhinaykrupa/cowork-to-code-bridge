@@ -1,0 +1,7 @@
+#!/bin/sh
+# Pre-push gate: run the local checks (replaces the old GitHub Actions CI).
+# Enable with `make hooks`. Skip once with `git push --no-verify`.
+set -e
+cd "$(git rev-parse --show-toplevel)"
+echo "pre-push: running 'make check' (bypass with: git push --no-verify)"
+exec make check

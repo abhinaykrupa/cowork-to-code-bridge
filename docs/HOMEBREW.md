@@ -47,4 +47,4 @@ repo every six hours, hashes its release tarball, and updates the formula with
 the tap's own token — no cross-repo credentials involved.
 [`packaging/homebrew/cowork-to-code-bridge.rb`](../packaging/homebrew/cowork-to-code-bridge.rb)
 in this repo is the source the tap formula was created from, and the
-`homebrew-audit` CI job runs `brew audit --strict` against it on every change.
+`make brew-audit` target runs `brew audit --strict` against it locally.

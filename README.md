@@ -1,7 +1,5 @@
 # cowork-to-code-bridge
 
-[![CI](https://github.com/abhinaykrupa/cowork-to-code-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/abhinaykrupa/cowork-to-code-bridge/actions/workflows/ci.yml)
-[![selfcheck](https://github.com/abhinaykrupa/cowork-to-code-bridge/actions/workflows/selfcheck.yml/badge.svg)](https://github.com/abhinaykrupa/cowork-to-code-bridge/actions/workflows/selfcheck.yml)
 [![Homebrew](https://img.shields.io/badge/brew-abhinaykrupa%2Ftap-orange?logo=homebrew)](https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/docs/HOMEBREW.md)
 [![Python](https://img.shields.io/badge/python-%3E%3D3.10-blue?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Stars](https://img.shields.io/github/stars/abhinaykrupa/cowork-to-code-bridge?style=social)](https://github.com/abhinaykrupa/cowork-to-code-bridge/stargazers)
@@ -609,6 +607,8 @@ on stateful async operations. Contributions and counter-arguments welcome.
 **v0.5.0** — early, but solid. The core works, survives crashes and reboots without repeating risky actions, installs as a global skill (one command), streams live progress for long tasks, and runs on macOS, Linux, and WSL2. Built for myself, open-sourced because it's useful to others. See the [CHANGELOG](https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/CHANGELOG.md) for the full history.
 
 PRs welcome — see [CONTRIBUTING.md](https://github.com/abhinaykrupa/cowork-to-code-bridge/blob/main/CONTRIBUTING.md). Browse [open issues](https://github.com/abhinaykrupa/cowork-to-code-bridge/issues) to find something to work on. Issues triaged best-effort. Not "production-grade" until tagged `v1.0.0`. macOS, Linux, and WSL2; native Windows not yet supported.
+
+**Checks run locally, not in CI:** `make venv && make hooks` once, then `make check` (or just `git push` — the pre-push hook runs it; `git push --no-verify` skips). Also `make e2e` (Docker), `make brew-audit`, `make check-matrix`. Details in CONTRIBUTING.md.
 
 ### Contributors
 
