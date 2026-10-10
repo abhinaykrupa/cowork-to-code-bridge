@@ -53,6 +53,12 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+try:
+    from cowork_to_code_bridge.sandbox import detect_sandbox_backend, wrap_argv
+except ImportError:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from cowork_to_code_bridge.sandbox import detect_sandbox_backend, wrap_argv
+
 # ─── Configuration ────────────────────────────────────────────────────────────
 BRIDGE_ROOT = Path(
     os.environ.get("BRIDGE_ROOT", Path.home() / ".cowork-to-code-bridge")
@@ -793,6 +799,12 @@ def run_one(cmd_path: Path, token_required: str | None,
         "idempotency_key": idem_key,
     })
     _journal_append({"id": cmd_id, "event": "started", "pid": os.getpid()})
+
+    # Opt-in Linux sandboxing (Vetto / Landlock / Bubblewrap)
+    sandbox_backend = detect_sandbox_backend()
+    if sandbox_backend != "off":
+        argv = wrap_argv(argv, script, cwd, BRIDGE_ROOT, sandbox_backend)
+        log(f"  ⛨ {cmd_id}: sandboxed via {sandbox_backend}")
 
     # Stream output to a live progress file so the client can show progress
     # while long tasks (builds, test runs) are still running, instead of waiting

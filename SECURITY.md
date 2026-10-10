@@ -99,25 +99,42 @@ Environment=BRIDGE_SCRIPTS=%h/.bridge-scripts
 Environment=BRIDGE_PERMISSION_CEILING=edit
 ```
 
+## Linux Sandboxing (Opt-In)
+
+On Linux hosts, kernel-enforced sandboxing can be enabled by setting `BRIDGE_SANDBOX`
+in your systemd service definition (`Environment=BRIDGE_SANDBOX=auto`):
+
+| `BRIDGE_SANDBOX` | Backend | Security Guarantees |
+|---|---|---|
+| `off` (default) | None | Standard unconfined execution (identical to macOS). |
+| `auto` | Vetto or Bubblewrap | Auto-detects `vetto` on PATH; falls back to `bwrap` if available; otherwise falls back to `off`. |
+| `vetto` | [Vetto](https://github.com/shleder/vetto) | Daemon-less Landlock LSM (ABI 1–6) filesystem confinement, tmpfs secret masking (`~/.ssh`, `~/.aws`, `.env`), and cgroups v2 `cgroup.kill` total process extinction. Claude scripts (`run_claude.sh`, `escalate_to_claude.sh`) run under the `--profile claude` profile, preserving `ANTHROPIC_API_KEY` and `CLAUDE_*` variables while protecting host secrets. |
+| `bwrap` | Bubblewrap (`bwrap`) | Unprivileged mount and PID namespace isolation (`--ro-bind / /`), bind-mounting the task `cwd` and `BRIDGE_ROOT` while masking `~/.ssh` and `.env`. |
+
+Because `BRIDGE_` is a protected prefix in the daemon's environment filter, a remote
+caller or task payload cannot override `BRIDGE_SANDBOX`; it is configured solely by
+the machine owner.
+
 ## Known limits
 
 Things the bridge does **not** currently guarantee, stated so nobody has to find
 them the hard way:
 
-- **A process that leaves its process group survives cancellation and timeout.**
+- **A process that leaves its process group survives cancellation and timeout (unconfined mode).**
   The daemon starts each task in a new session and signals that whole group —
-  SIGTERM, then SIGKILL after `BRIDGE_CANCEL_GRACE_SEC`. A descendant that calls
-  `setsid()` (or double-forks into a new session) is no longer in the group and
-  keeps running. On Linux, cgroups v2 `cgroup.kill` would close this; macOS has
-  no equivalent, so it is documented rather than papered over.
+  SIGTERM, then SIGKILL after `BRIDGE_CANCEL_GRACE_SEC`. In default unconfined mode,
+  a descendant that calls `setsid()` (or double-forks into a new session) is no longer
+  in the group and keeps running. On Linux, setting `BRIDGE_SANDBOX=vetto` (or `auto`)
+  solves this via cgroups v2 `cgroup.kill` and verified process extinction, or via
+  PID namespace containment with `bwrap`. On macOS, no equivalent kernel cgroup exists.
 - **The shared folder must be a local bind mount, not a sync tool.** Atomicity
   relies on `rename()` within one filesystem. Syncthing, Dropbox, iCloud Drive
   and similar can surface a file before its contents have arrived, or deliver
   the rename and the payload out of order.
-- **No kernel-level confinement of tasks.** Scripts run with your full user
-  permissions; nothing masks `~/.ssh` or `~/.aws` from them. Landlock and user
-  namespaces would be the Linux answer; macOS has neither (`sandbox-exec` is
-  deprecated). Output redaction is best-effort and is not a substitute.
+- **No kernel-level confinement of tasks by default.** Without sandbox configuration,
+  scripts run with normal user permissions; nothing masks `~/.ssh` or `~/.aws` from them.
+  On Linux, opt in via `BRIDGE_SANDBOX=vetto` or `bwrap` to enable Landlock LSM / mount
+  namespace isolation and secret masking. Output redaction remains active as defence-in-depth.
 - **One daemon per bridge root.** In-flight claims are resolved at daemon
   startup, which is only correct when a single daemon owns the queue. Running
   two against the same root is unsupported.
